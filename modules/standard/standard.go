@@ -8,5 +8,6 @@ import (
 	_ "github.com/GoldenDeals/aish-core/modules/llm/anthropic"
 	_ "github.com/GoldenDeals/aish-core/modules/policy/ask"
 	_ "github.com/GoldenDeals/aish-core/modules/store/jsonl"
+	_ "github.com/GoldenDeals/aish-core/modules/tool/bash"
 	_ "github.com/GoldenDeals/aish-core/modules/tool/fs"
 )
