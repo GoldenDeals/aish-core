@@ -257,8 +257,10 @@ func TestCloseFromHookDoesNotHang(t *testing.T) {
 	var sess *aish.Session
 	var closeErr error
 	var closeCalled bool
+	hookDone := make(chan struct{})
 	s, host, startCtx := hookSession(t, aish.SessionConfig{}, func(h *aish.Host) {
 		h.Handle("quit", func(ctx context.Context, _ ping) error {
+			defer close(hookDone)
 			closeCalled = true
 			closeErr = sess.Close(ctx)
 
@@ -274,6 +276,8 @@ func TestCloseFromHookDoesNotHang(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Close from a hook hangs")
 	}
+	// Close cancels the transaction, so Emit may return before the hook does.
+	<-hookDone
 	if !closeCalled || closeErr != nil {
 		t.Errorf("Close from a hook: called %v, err %v", closeCalled, closeErr)
 	}
