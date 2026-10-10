@@ -1,7 +1,9 @@
 package cli_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -118,4 +120,94 @@ func TestInvalidAnswerAsksAgain(t *testing.T) {
 	if file != "" || strings.Count(out, "Allow fs_edit") != 2 {
 		t.Fatalf("file %q, output:\n%s", file, out)
 	}
+}
+
+// gatedLLM holds every llm.request until gate is closed, so a test can type
+// while the agent is busy.
+type gatedLLM struct {
+	started chan struct{}
+	gate    chan struct{}
+}
+
+func (g *gatedLLM) Init(_ context.Context, h *aish.Host) error {
+	h.Handle("respond", func(ctx context.Context, _ events.LLMRequest) error {
+		select {
+		case g.started <- struct{}{}:
+		default:
+		}
+		<-g.gate
+		content, w := aish.NewStream[events.ContentDelta]()
+		w.Write(events.ContentDelta{Type: events.DeltaText, Text: "ok"})
+		w.Close(nil)
+		err := h.Emit(ctx, events.AssistantMessage{Content: content})
+		if errors.Is(err, aish.ErrUnhandled) {
+			return nil
+		}
+
+		return err
+	})
+
+	return nil
+}
+
+func TestQueuedMessageIsMarked(t *testing.T) {
+	t.Parallel()
+
+	llm := &gatedLLM{started: make(chan struct{}, 1), gate: make(chan struct{})}
+	pr, pw := io.Pipe()
+	o := &output{}
+	front := &cli.CLI{In: pr, Out: o}
+	s := test.NewSession(t,
+		aish.Instance{Name: "agent.loop", Module: &loop.Loop{}},
+		aish.Instance{Name: "llm.gated", Module: llm},
+		aish.Instance{Name: "frontend.cli", Module: front},
+	)
+
+	if _, err := io.WriteString(pw, "one\n"); err != nil {
+		t.Fatal(err)
+	}
+	<-llm.started
+	if _, err := io.WriteString(pw, "two\n"); err != nil {
+		t.Fatal(err)
+	}
+	o.waitFor(t, "(queued")
+	close(llm.gate)
+	if err := pw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	<-front.Done()
+	s.Wait()
+
+	if !strings.HasPrefix(o.String(), "session ") {
+		t.Errorf("output must start with the session ID:\n%s", o.String())
+	}
+}
+
+func TestLoopStoppedIsShown(t *testing.T) {
+	t.Parallel()
+
+	reader := &fs.Read{}
+	reader.Root = t.TempDir()
+	llm := &test.FakeLLM{Replies: []test.Reply{
+		{Calls: []events.ToolCall{{ID: "c1", Name: "fs_read", Input: json.RawMessage(`{"path":"x"}`)}}},
+	}}
+	pr, pw := io.Pipe()
+	o := &output{}
+	front := &cli.CLI{In: pr, Out: o}
+	s := test.NewSession(t,
+		aish.Instance{Name: "agent.loop", Module: &loop.Loop{MaxSteps: 1}},
+		aish.Instance{Name: "llm.fake", Module: llm},
+		aish.Instance{Name: "tool.fs_read", Module: reader},
+		aish.Instance{Name: "frontend.cli", Module: front},
+	)
+
+	if _, err := io.WriteString(pw, "go\n"); err != nil {
+		t.Fatal(err)
+	}
+	o.waitFor(t, "[stopped] max_steps")
+	if err := pw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	<-front.Done()
+	s.Wait()
 }

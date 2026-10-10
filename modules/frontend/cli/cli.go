@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	aish "github.com/GoldenDeals/aish-core"
 	"github.com/GoldenDeals/aish-core/events"
@@ -39,6 +40,10 @@ type CLI struct {
 	h    *aish.Host
 	done chan struct{}
 
+	outMu    sync.Mutex // hooks and the input goroutine both write to Out
+	busy     atomic.Bool
+	inflight atomic.Int32 // lines read but not yet committed as user.message
+
 	mu     sync.Mutex
 	answer chan string // set while a question waits for its answer
 	eof    bool
@@ -52,6 +57,9 @@ func (c *CLI) Init(_ context.Context, h *aish.Host) error {
 	h.Handle("show-message", c.showMessage)
 	h.Handle("ask", c.ask)
 	h.Handle("show-call", c.showCall, aish.Priority(0))
+	h.Handle("show-stopped", c.showStopped)
+	h.Observe("busy-start", func(context.Context, aish.TxStarted) { c.busy.Store(true) })
+	h.Observe("busy-end", func(context.Context, aish.TxCommitted) { c.busy.Store(false) })
 
 	return nil
 }
@@ -66,6 +74,7 @@ func (c *CLI) Start(ctx context.Context) error {
 		in = os.Stdin
 		c.cancelOnInterrupt(ctx)
 	}
+	c.printf("session %s\n", c.h.Session().ID)
 	c.printHistory()
 
 	lines := make(chan string)
@@ -122,6 +131,12 @@ func (c *CLI) dispatch(lines <-chan string, msgs chan<- string) {
 
 			continue
 		}
+		// Approximate: a line typed in the instant between two steps of the
+		// agent is not marked, though it waits as well.
+		if c.busy.Load() || c.inflight.Load() > 0 {
+			c.printf("(queued: the agent sees it after the current step)\n")
+		}
+		c.inflight.Add(1)
 		msgs <- line
 	}
 	c.mu.Lock()
@@ -138,13 +153,13 @@ func (c *CLI) dispatch(lines <-chan string, msgs chan<- string) {
 func (c *CLI) send(ctx context.Context, msgs <-chan string) {
 	defer close(c.done)
 	for text := range msgs {
-		if strings.TrimSpace(text) == "" {
-			continue
+		if strings.TrimSpace(text) != "" {
+			err := c.h.Emit(ctx, events.UserMessage{Text: text, Source: source})
+			if err != nil && !errors.Is(err, aish.ErrUnhandled) {
+				c.h.Log().Error("cannot send message", "err", err)
+			}
 		}
-		err := c.h.Emit(ctx, events.UserMessage{Text: text, Source: source})
-		if err != nil && !errors.Is(err, aish.ErrUnhandled) {
-			c.h.Log().Error("cannot send message", "err", err)
-		}
+		c.inflight.Add(-1)
 	}
 }
 
@@ -174,6 +189,12 @@ func (c *CLI) showMessage(ctx context.Context, m events.AssistantMessage) error 
 	if err := m.Content.Err(); err != nil {
 		return fmt.Errorf("aish: frontend.cli: %w", err)
 	}
+
+	return nil
+}
+
+func (c *CLI) showStopped(_ context.Context, e events.LoopStopped) error {
+	c.printf("[stopped] %s\n", e.Reason)
 
 	return nil
 }
@@ -258,6 +279,9 @@ func last(options []string) string {
 }
 
 func (c *CLI) printf(format string, args ...any) {
+	c.outMu.Lock()
+	defer c.outMu.Unlock()
+
 	if _, err := fmt.Fprintf(c.Out, format, args...); err != nil {
 		c.h.Log().Error("cannot write output", "err", err)
 	}
