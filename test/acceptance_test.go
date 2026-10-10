@@ -12,6 +12,7 @@ import (
 
 	aish "github.com/GoldenDeals/aish-core"
 	"github.com/GoldenDeals/aish-core/events"
+	"github.com/GoldenDeals/aish-core/modules/policy/ask"
 	"github.com/GoldenDeals/aish-core/test"
 	"github.com/GoldenDeals/aish-core/trace"
 	"github.com/GoldenDeals/aish-core/transcript"
@@ -19,8 +20,7 @@ import (
 
 // The stage 0 acceptance scenario (§11): a policy intercepts tool.call, asks
 // through a frontend and re-emits the call; without a frontend the call is
-// denied. The policy and the tool below are test doubles of policy ask and
-// tool fs_edit (§8).
+// denied. The tool below is a test double of tool fs_edit (§8).
 
 func textBlocks(s string) []events.Block { return []events.Block{{Type: events.BlockText, Text: s}} }
 
@@ -59,64 +59,6 @@ func (f *fsTool) Init(_ context.Context, h *aish.Host) error {
 	return nil
 }
 
-// askPolicy lets read-only calls through and asks about the rest.
-type askPolicy struct {
-	h       *aish.Host
-	waiting map[string]aish.Envelope // by question ID, which is the call's Meta.ID
-}
-
-func (p *askPolicy) Init(_ context.Context, h *aish.Host) error {
-	p.h, p.waiting = h, map[string]aish.Envelope{}
-	h.Mutate("authorize", p.authorize, aish.Priority(1000))
-	h.Handle("answer", p.answer)
-
-	return nil
-}
-
-func (p *askPolicy) authorize(ctx context.Context, m *aish.Mut[events.ToolCall]) error {
-	if m.Event().Effects.ReadOnly {
-		return nil
-	}
-	m.Remove()
-	call := aish.Envelope{Meta: m.Meta(), Event: *m.Event()}
-	p.waiting[call.Meta.ID] = call
-
-	err := p.h.Emit(ctx, events.UserQuestion{
-		ID: call.Meta.ID, Text: "Allow " + m.Event().Name + "?", Options: []string{"yes", "no"}, Ref: call.Meta.ID,
-	})
-	if errors.Is(err, aish.ErrUnhandled) {
-		delete(p.waiting, call.Meta.ID)
-
-		return p.deny(ctx, call, "nobody to ask")
-	}
-
-	return err
-}
-
-func (p *askPolicy) answer(ctx context.Context, a events.UserAnswer) error {
-	call, ok := p.waiting[a.QuestionID]
-	if !ok {
-		return nil
-	}
-	delete(p.waiting, a.QuestionID)
-	if a.Choice == "yes" {
-		return p.h.EmitWith(ctx, aish.Below(1000), call)
-	}
-
-	return p.deny(ctx, call, "the user said no")
-}
-
-// deny records the call as denied below executors and answers the model.
-func (p *askPolicy) deny(ctx context.Context, call aish.Envelope, reason string) error {
-	c, _ := call.Event.(events.ToolCall)
-	c.Denied = true
-
-	return errors.Join(
-		ignoreUnhandled(p.h.EmitWith(ctx, aish.Below(aish.DefaultPriority), aish.Envelope{Meta: call.Meta, Event: c})),
-		ignoreUnhandled(p.h.Emit(ctx, events.ToolResult{CallID: c.ID, IsError: true, Content: textBlocks("Tool call denied: " + reason)})),
-	)
-}
-
 func TestStage0(t *testing.T) {
 	t.Parallel()
 
@@ -139,7 +81,7 @@ func TestStage0(t *testing.T) {
 			tool := &fsTool{}
 			instances := []aish.Instance{
 				{Name: "tool.fs", Module: tool},
-				{Name: "policy.test", Module: &askPolicy{}},
+				{Name: "policy.test", Module: &ask.Policy{}},
 			}
 			if tc.frontend != nil {
 				instances = append(instances, aish.Instance{Name: "frontend.test", Module: tc.frontend})
