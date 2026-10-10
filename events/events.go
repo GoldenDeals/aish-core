@@ -42,7 +42,9 @@ type LLMRequest struct {
 	Trigger  aish.Meta // what caused the request: user.message or tool.result
 	System   []*Section
 	Tools    []ToolSpec
-	Messages []Message
+	// Messages is not journaled: transcript.Build rebuilds it from the other
+	// events, and storing it would grow the journal quadratically.
+	Messages []Message `json:"-"`
 	Params   Params
 }
 
@@ -280,3 +282,14 @@ func (AssistantMessage) Kind() string { return "assistant.message" }
 func (ToolCall) Kind() string         { return "tool.call" }
 func (ToolResult) Kind() string       { return "tool.result" }
 func (Compacted) Kind() string        { return "compacted" }
+
+func init() {
+	aish.RegisterEvent[UserMessage]()
+	aish.RegisterEvent[UserQuestion]()
+	aish.RegisterEvent[UserAnswer]()
+	aish.RegisterEvent[LLMRequest]()
+	aish.RegisterEvent[AssistantMessage]()
+	aish.RegisterEvent[ToolCall]()
+	aish.RegisterEvent[ToolResult]()
+	aish.RegisterEvent[Compacted]()
+}

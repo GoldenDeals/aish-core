@@ -2,6 +2,8 @@ package aish
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"reflect"
 	"sync"
 
@@ -104,6 +106,33 @@ func (s Stream[C]) Err() error {
 	defer s.b.mu.Unlock()
 
 	return s.b.err
+}
+
+// MarshalJSON writes the body. Open streams are written as written so far;
+// the core commits a transaction only after its streams close.
+func (s Stream[C]) MarshalJSON() ([]byte, error) {
+	data, err := json.Marshal(s.Body())
+	if err != nil {
+		return nil, fmt.Errorf("aish: encode stream: %w", err)
+	}
+
+	return data, nil
+}
+
+// UnmarshalJSON restores a closed stream with the given body.
+func (s *Stream[C]) UnmarshalJSON(data []byte) error {
+	var items []C
+	if err := json.Unmarshal(data, &items); err != nil {
+		return fmt.Errorf("aish: decode stream: %w", err)
+	}
+	st, w := NewStream[C]()
+	for _, c := range items {
+		w.Write(c)
+	}
+	w.Close(nil)
+	*s = st
+
+	return nil
 }
 
 func (s Stream[C]) buffer() streamBuffer {

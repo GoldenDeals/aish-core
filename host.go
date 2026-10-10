@@ -15,10 +15,13 @@ type Host struct {
 	sess     *session
 	instance string
 	log      *slog.Logger
+	options  Options
 }
 
 // Instance returns the module instance name, for example "llm.anthropic/fast".
 func (h *Host) Instance() string { return h.instance }
+
+func (h *Host) Options() Options { return h.options }
 
 func (h *Host) Session() SessionInfo { return h.sess.info }
 

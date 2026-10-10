@@ -10,12 +10,20 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/coredns/caddy/caddyfile"
 )
 
 // Module is the only interface every module implements. In Init a module
 // subscribes to events; that is what defines what it does.
 type Module interface {
 	Init(ctx context.Context, h *Host) error
+}
+
+// CaddyfileUnmarshaler reads the module's own directive. The Dispenser stands
+// on its first token and is limited to its block.
+type CaddyfileUnmarshaler interface {
+	UnmarshalCaddyfile(d *caddyfile.Dispenser) error
 }
 
 // Validator checks configuration and must have no side effects: it runs
