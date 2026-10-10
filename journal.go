@@ -23,7 +23,7 @@ type Tx struct {
 	// Events are the final events in order of appearance. Removed events are
 	// absent here but present in Trace.
 	Events []Envelope
-	Trace  []TraceEntry
+	Trace  []TraceEntry `json:"-"`
 }
 
 // TraceAction says what happened to an event at one point of delivery.

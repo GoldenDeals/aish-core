@@ -1,0 +1,105 @@
+tx 1 committed
+  emit      1.1 session.started core
+events: 1.1 session.started
+tx 2 committed
+  emit      2.1 user.message frontend.cli
+  unhandled 2.1 user.message
+events: 2.1 user.message
+tx 3 committed
+  emit      3.1 llm.request agent.loop:continue
+  change    3.1 llm.request agent.loop:messages (94.773µs)
+  change    3.1 llm.request tool.fs_edit:advertise (3.282µs)
+  change    3.1 llm.request tool.fs_read:advertise (2.934µs)
+  handle    3.1 llm.request llm.anthropic:respond (2.779776632s)
+    emit      3.2 assistant.message llm.anthropic:respond
+    handle    3.2 assistant.message frontend.cli:show-message (2.77939223s)
+    emit      3.3 tool.call llm.anthropic:respond
+    change    3.3 tool.call tool.fs_read:effects (30.032µs)
+    mutate    3.3 tool.call policy.ask:authorize (2.444µs)
+    handle    3.3 tool.call tool.fs_read:exec (92.05µs)
+      emit      3.4 tool.result tool.fs_read:exec
+      unhandled 3.4 tool.result
+    handle    3.3 tool.call frontend.cli:show-call (8.521µs)
+events: 3.1 llm.request, 3.2 assistant.message, 3.3 tool.call, 3.4 tool.result
+tx 4 committed
+  emit      4.1 llm.request agent.loop:continue
+  change    4.1 llm.request agent.loop:messages (35.339µs)
+  change    4.1 llm.request tool.fs_edit:advertise (2.933µs)
+  change    4.1 llm.request tool.fs_read:advertise (1.886µs)
+  handle    4.1 llm.request llm.anthropic:respond (41.579415378s)
+    emit      4.2 assistant.message llm.anthropic:respond
+    handle    4.2 assistant.message frontend.cli:show-message (41.579319137s)
+events: 4.1 llm.request, 4.2 assistant.message
+tx 5 committed
+  emit      5.1 user.message frontend.cli
+  unhandled 5.1 user.message
+events: 5.1 user.message
+tx 6 committed
+  emit      6.1 llm.request agent.loop:continue
+  change    6.1 llm.request agent.loop:messages (186.893µs)
+  change    6.1 llm.request tool.fs_edit:advertise (2.375µs)
+  change    6.1 llm.request tool.fs_read:advertise (1.816µs)
+  handle    6.1 llm.request llm.anthropic:respond (12.55757643s)
+    emit      6.2 assistant.message llm.anthropic:respond
+    handle    6.2 assistant.message frontend.cli:show-message (5.015308791s)
+    emit      6.3 tool.call llm.anthropic:respond
+    change    6.3 tool.call tool.fs_edit:effects (22.768µs)
+    remove    6.3 tool.call policy.ask:authorize (7.538857107s)
+      emit      6.4 user.question policy.ask:authorize
+      handle    6.4 user.question frontend.cli:ask (7.538832592s)
+        emit      6.5 user.answer frontend.cli:ask
+        handle    6.5 user.answer policy.ask:answer (948.717µs)
+          emit      6.3 tool.call policy.ask:answer
+          handle    6.3 tool.call tool.fs_edit:exec (733.468µs)
+            emit      6.6 tool.result tool.fs_edit:exec
+            unhandled 6.6 tool.result
+          handle    6.3 tool.call frontend.cli:show-call (17.6µs)
+events: 6.1 llm.request, 6.2 assistant.message, 6.4 user.question, 6.5 user.answer, 6.3 tool.call, 6.6 tool.result
+tx 7 committed
+  emit      7.1 llm.request agent.loop:continue
+  change    7.1 llm.request agent.loop:messages (159.586µs)
+  change    7.1 llm.request tool.fs_edit:advertise (2.863µs)
+  change    7.1 llm.request tool.fs_read:advertise (2.305µs)
+  handle    7.1 llm.request llm.anthropic:respond (2.114398695s)
+    emit      7.2 assistant.message llm.anthropic:respond
+    handle    7.2 assistant.message frontend.cli:show-message (2.114328086s)
+events: 7.1 llm.request, 7.2 assistant.message
+tx 1 committed
+  emit      1.1 session.started core
+events: 1.1 session.started
+tx 2 committed
+  emit      2.1 user.message frontend.cli
+  unhandled 2.1 user.message
+events: 2.1 user.message
+tx 3 committed
+  emit      3.1 llm.request agent.loop:continue
+  change    3.1 llm.request agent.loop:messages (117.891µs)
+  change    3.1 llm.request tool.fs_edit:advertise (3.772µs)
+  change    3.1 llm.request tool.fs_read:advertise (3.353µs)
+  handle    3.1 llm.request llm.anthropic:respond (5.853377496s)
+    emit      3.2 assistant.message llm.anthropic:respond
+    handle    3.2 assistant.message frontend.cli:show-message (5.852655759s)
+    emit      3.3 tool.call llm.anthropic:respond
+    change    3.3 tool.call tool.fs_read:effects (65.371µs)
+    mutate    3.3 tool.call policy.ask:authorize (3.352µs)
+    handle    3.3 tool.call tool.fs_read:exec (121.872µs)
+      emit      3.4 tool.result tool.fs_read:exec
+      unhandled 3.4 tool.result
+    handle    3.3 tool.call frontend.cli:show-call (11.385µs)
+    emit      3.5 tool.call llm.anthropic:respond
+    change    3.5 tool.call tool.fs_read:effects (9.428µs)
+    mutate    3.5 tool.call policy.ask:authorize (1.397µs)
+    handle    3.5 tool.call tool.fs_read:exec (29.124µs)
+      emit      3.6 tool.result tool.fs_read:exec
+      unhandled 3.6 tool.result
+    handle    3.5 tool.call frontend.cli:show-call (5.657µs)
+events: 3.1 llm.request, 3.2 assistant.message, 3.3 tool.call, 3.4 tool.result, 3.5 tool.call, 3.6 tool.result
+tx 4 committed
+  emit      4.1 llm.request agent.loop:continue
+  change    4.1 llm.request agent.loop:messages (73.892µs)
+  change    4.1 llm.request tool.fs_edit:advertise (2.444µs)
+  change    4.1 llm.request tool.fs_read:advertise (1.886µs)
+  handle    4.1 llm.request llm.anthropic:respond (765.843028ms): aish: llm.anthropic: aish: hook frontend.cli:show-message: aish: frontend.cli: stream: POST "http://127.0.0.1:8317/v1/messages": 400 Bad Request {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: `thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified. These blocks must remain as they were in the original response."}}
+    emit      4.2 assistant.message llm.anthropic:respond
+    handle    4.2 assistant.message frontend.cli:show-message (765.720737ms): aish: frontend.cli: stream: POST "http://127.0.0.1:8317/v1/messages": 400 Bad Request {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: `thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified. These blocks must remain as they were in the original response."}}
+events: 4.1 llm.request, 4.2 assistant.message, 4.3 module.error, 4.4 module.error

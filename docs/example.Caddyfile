@@ -1,18 +1,15 @@
-{#  Это блок глобальных настроек - общих для всех клиентов
-    max_steps 50
-    hooks {
-        order pathnorm.mutate before cedar.authorize
-        disable mcp.inject
-    }
+# Пример конфигурации MVP.
+#
+#   aish --config docs/example.Caddyfile                 # новая сессия
+#   aish --config docs/example.Caddyfile --resume <ID>   # продолжить сессию
+#   aish --config docs/example.Caddyfile --trace t.log   # trace каждой транзакции пишется в t.log сразу после коммита
+#
+# Поддерживается один блок агента: main. Директива «<namespace> <name> [args] { ... }»
+# подключает модуль <namespace>.<name>; список модулей сборки выводит `aish list-modules`.
+# Секреты задаются только через {$ENV}.
 
-    # import preset base - можно включить предустановленный пресет (или файл по path) чтобы не настраивать все самомму
-    frontend pty {
-        shell /bin/bash
-        trigger ai
-    }
-}
-
-(fs) {
+# Сниппет: подключается строкой «import files».
+(files) {
     tool fs_read
     tool fs_edit {
         root .
@@ -20,37 +17,28 @@
 }
 
 main {
+    # Шагов агента (запросов к модели) на одно сообщение пользователя.
+    max_steps 50
+
     agent loop
-    #context system_prompt default
-    #context append "Answer in Russian"
-    context skills ~/.aish/skills ./.aish/skills
 
+    # Системный промпт: без аргументов встроенный; иначе «context system_prompt файл.md»
+    # или блок { text "..." }.
+    context system_prompt
+    frontend cli
+
+    # Ключ можно не указывать: SDK читает ANTHROPIC_API_KEY или профиль `ant auth login`.
     llm anthropic {
-        model claude-sonnet-4-5
+        model claude-opus-5-5
         api_key {$ANTHROPIC_API_KEY}
-    }
-    llm anthropic fast {
-        model claude-haiku-4-5
-        api_key {$ANTHROPIC_API_KEY}
+        base_url http://127.0.0.1:8317 
     }
 
-    import fs
+    import files
 
-    tool mcp github {
-        command github-mcp-server stdio
-    }
-    tool subagent reviewer researcher
+    # Запись, кроме чтения, подтверждается пользователем.
+    policy ask
 
-    policy cedar ./policies/*.cedar
+    # Журнал сессий; по умолчанию ~/.aish/sessions.
     store jsonl ~/.aish/sessions
-}
-
-reviewer {
-    llm fast
-    tool fs_read
-}
-
-researcher {
-    import fs
-    tool mcp github
 }

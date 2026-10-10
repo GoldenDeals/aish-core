@@ -28,6 +28,10 @@ linters:
     - usestdlibvars
     - wrapcheck
   settings:
+    wrapcheck:
+      # Dispenser errors already carry file and line.
+      ignore-sig-regexps:
+        - 'caddyfile\.Dispenser\)\.'
     errcheck:
       check-type-assertions: true
     exhaustive:

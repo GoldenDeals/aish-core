@@ -42,7 +42,9 @@ type LLMRequest struct {
 	Trigger  aish.Meta // what caused the request: user.message or tool.result
 	System   []*Section
 	Tools    []ToolSpec
-	Messages []Message
+	// Messages is not journaled: transcript.Build rebuilds it from the other
+	// events, and storing it would grow the journal quadratically.
+	Messages []Message `json:"-"`
 	Params   Params
 }
 
@@ -145,6 +147,7 @@ type ContentDelta struct {
 	Data       []byte // DeltaRedactedThinking
 	StopReason string // DeltaStop: "end_turn", "tool_use", "max_tokens"
 	Usage      *Usage // DeltaStop
+	ToolID     string // DeltaToolUse: ToolCall.ID
 }
 
 const (
@@ -153,6 +156,10 @@ const (
 	DeltaSignature        = "signature"
 	DeltaRedactedThinking = "redacted_thinking"
 	DeltaStop             = "stop"
+	// DeltaToolUse marks where the tool_use block of the call ToolID sits in
+	// the reply. The provider must replay thinking and tool_use blocks in the
+	// order it produced them, and the call itself is a separate event.
+	DeltaToolUse = "tool_use"
 )
 
 type Usage struct {
@@ -177,7 +184,8 @@ func (m AssistantMessage) Text() string {
 // Blocks assembles the chunks written so far into text, thinking and
 // redacted thinking blocks, in stream order. A thinking block without a
 // signature (the turn was cut off) is dropped: the provider would reject it.
-// Empty text blocks are dropped too.
+// Empty text blocks are dropped too. A DeltaToolUse becomes a tool_use block
+// that carries only its ID; transcript.Build fills in the call.
 func (m AssistantMessage) Blocks() []Block {
 	var out []Block
 	open := "" // BlockText or BlockThinking while chunks append to text
@@ -212,6 +220,9 @@ func (m AssistantMessage) Blocks() []Block {
 		case DeltaRedactedThinking:
 			finish("")
 			out = append(out, Block{Type: BlockRedactedThinking, Data: d.Data})
+		case DeltaToolUse:
+			finish("")
+			out = append(out, Block{Type: BlockToolUse, ID: d.ToolID})
 		default: // DeltaStop and unknown chunks carry no content
 		}
 	}
@@ -272,6 +283,13 @@ type Compacted struct {
 	Summary string
 }
 
+// LoopStopped is emitted by an agent loop that gave up continuing, so
+// frontends can tell the user why the agent went quiet.
+type LoopStopped struct {
+	Reason string // "max_steps"
+}
+
+func (LoopStopped) Kind() string      { return "loop.stopped" }
 func (UserMessage) Kind() string      { return "user.message" }
 func (UserQuestion) Kind() string     { return "user.question" }
 func (UserAnswer) Kind() string       { return "user.answer" }
@@ -280,3 +298,15 @@ func (AssistantMessage) Kind() string { return "assistant.message" }
 func (ToolCall) Kind() string         { return "tool.call" }
 func (ToolResult) Kind() string       { return "tool.result" }
 func (Compacted) Kind() string        { return "compacted" }
+
+func init() {
+	aish.RegisterEvent[UserMessage]()
+	aish.RegisterEvent[UserQuestion]()
+	aish.RegisterEvent[UserAnswer]()
+	aish.RegisterEvent[LLMRequest]()
+	aish.RegisterEvent[AssistantMessage]()
+	aish.RegisterEvent[ToolCall]()
+	aish.RegisterEvent[ToolResult]()
+	aish.RegisterEvent[Compacted]()
+	aish.RegisterEvent[LoopStopped]()
+}

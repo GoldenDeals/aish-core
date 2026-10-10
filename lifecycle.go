@@ -41,6 +41,7 @@ type SessionConfig struct {
 	// cancelled with ErrStreamStalled and the open streams are closed with
 	// that error. Zero means no limit.
 	StreamTimeout time.Duration
+	Options       Options
 }
 
 // Session is a set of module instances and their journal (§4.1).
@@ -92,7 +93,9 @@ func NewSession(cfg SessionConfig) (*Session, error) {
 		instances: slices.Clone(cfg.Instances),
 	}
 	for _, inst := range s.instances {
-		s.hosts = append(s.hosts, s.s.host(inst.Name))
+		h := s.s.host(inst.Name)
+		h.options = cfg.Options
+		s.hosts = append(s.hosts, h)
 	}
 
 	return s, nil
