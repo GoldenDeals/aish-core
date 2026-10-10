@@ -1,0 +1,56 @@
+{#  Это блок глобальных настроек - общих для всех клиентов
+    max_steps 50
+    hooks {
+        order pathnorm.mutate before cedar.authorize
+        disable mcp.inject
+    }
+
+    # import preset base - можно включить предустановленный пресет (или файл по path) чтобы не настраивать все самомму
+    frontend pty {
+        shell /bin/bash
+        trigger ai
+    }
+}
+
+(fs) {
+    tool fs_read
+    tool fs_edit {
+        root .
+    }
+}
+
+main {
+    agent loop
+    #context system_prompt default
+    #context append "Answer in Russian"
+    context skills ~/.aish/skills ./.aish/skills
+
+    llm anthropic {
+        model claude-sonnet-4-5
+        api_key {$ANTHROPIC_API_KEY}
+    }
+    llm anthropic fast {
+        model claude-haiku-4-5
+        api_key {$ANTHROPIC_API_KEY}
+    }
+
+    import fs
+
+    tool mcp github {
+        command github-mcp-server stdio
+    }
+    tool subagent reviewer researcher
+
+    policy cedar ./policies/*.cedar
+    store jsonl ~/.aish/sessions
+}
+
+reviewer {
+    llm fast
+    tool fs_read
+}
+
+researcher {
+    import fs
+    tool mcp github
+}
