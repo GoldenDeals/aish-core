@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"slices"
 )
@@ -13,10 +14,18 @@ import (
 type Host struct {
 	sess     *session
 	instance string
+	log      *slog.Logger
 }
 
 // Instance returns the module instance name, for example "llm.anthropic/fast".
 func (h *Host) Instance() string { return h.instance }
+
+func (h *Host) Session() SessionInfo { return h.sess.info }
+
+// Log is the only place a module writes logs to: the terminal belongs to the
+// frontend. Records carry session and instance; logged through a *Context
+// method with a hook ctx they also carry tx, event and hook.
+func (h *Host) Log() *slog.Logger { return h.log }
 
 func (h *Host) Journal() *Journal { return &h.sess.journal }
 
@@ -88,6 +97,7 @@ func (h *Host) Emit(ctx context.Context, evs ...Event) error {
 //     returns at once; errors are recorded in it as module.error;
 //   - the Start context: a new transaction is queued and EmitWith waits
 //     until it has committed and its Observe hooks have run;
+//   - the Init context: ErrNotStarted;
 //   - any other ctx: ErrWouldDeadlock.
 //
 // Errors (ErrUnhandled, *HookError, ErrLimit, cancellation) are joined with
@@ -96,6 +106,9 @@ func (h *Host) EmitWith(ctx context.Context, o EmitOpts, evs ...Event) error {
 	info := infoOf(ctx)
 	if info == nil || info.sess != h.sess {
 		return ErrWouldDeadlock
+	}
+	if info.init {
+		return ErrNotStarted
 	}
 	for _, ev := range evs {
 		if err := h.sess.checkEmit(ev); err != nil {

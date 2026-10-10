@@ -30,6 +30,7 @@ type ctxInfo struct {
 	frame   *frame   // Mutate and Handle hooks: the invocation that owns ctx
 	hook    *hook    // the hook that owns ctx; nil for the Start context
 	observe bool     // ctx of an Observe hook
+	init    bool     // ctx of Init: Emit is not allowed yet
 	meta    Meta     // event being delivered to the hook
 }
 
@@ -50,6 +51,7 @@ type pending struct {
 }
 
 type sessionConfig struct {
+	info      SessionInfo
 	log       *slog.Logger
 	now       func() time.Time
 	warnAfter time.Duration
@@ -59,6 +61,7 @@ type sessionConfig struct {
 // executes every Mutate, Handle and Observe hook, so hooks of a session
 // never run concurrently.
 type session struct {
+	info      SessionInfo
 	ctx       context.Context
 	cancel    context.CancelFunc
 	log       *slog.Logger
@@ -73,7 +76,9 @@ type session struct {
 	cur     *txState
 	lastSeq uint64
 	running bool // transactions may run; Seed is no longer allowed
+	busy    bool // the runner took a transaction and has not finished it
 	closed  bool
+	idle    chan struct{} // closed and replaced whenever the session becomes idle
 
 	wake    chan struct{}
 	stopped chan struct{}
@@ -82,17 +87,20 @@ type session struct {
 func newSession(cfg sessionConfig) *session {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &session{
+		info:      cfg.info,
 		ctx:       ctx,
 		cancel:    cancel,
-		log:       cfg.log,
 		now:       cfg.now,
 		warnAfter: cfg.warnAfter,
+		idle:      make(chan struct{}),
 		wake:      make(chan struct{}, 1),
 		stopped:   make(chan struct{}),
 	}
-	if s.log == nil {
-		s.log = slog.New(slog.DiscardHandler)
+	base := slog.DiscardHandler
+	if cfg.log != nil {
+		base = cfg.log.Handler()
 	}
+	s.log = slog.New(ctxHandler{base}).With("session", cfg.info.ID)
 	if s.now == nil {
 		s.now = time.Now
 	}
@@ -104,7 +112,45 @@ func newSession(cfg sessionConfig) *session {
 }
 
 func (s *session) host(instance string) *Host {
-	return &Host{sess: s, instance: instance}
+	return &Host{sess: s, instance: instance, log: s.log.With("instance", instance)}
+}
+
+// initContext is the context given to Init: Seed works, Emit does not.
+func (s *session) initContext() context.Context {
+	return context.WithValue(s.ctx, ctxKey{}, &ctxInfo{sess: s, init: true})
+}
+
+// emitCore queues a transaction with an event of the core itself.
+func (s *session) emitCore(ev Event) error {
+	return s.enqueue(s.ctx, &pending{events: []Event{ev}, source: sourceCore})
+}
+
+// waitIdle blocks until no transaction is open or queued. Observe hooks run
+// inside the transaction they observe, so a transaction they queue is seen
+// before the session looks idle.
+func (s *session) waitIdle(ctx context.Context) error {
+	for {
+		s.mu.Lock()
+		if s.closed || (!s.busy && len(s.queue) == 0) {
+			s.mu.Unlock()
+
+			return nil
+		}
+		idle := s.idle
+		s.mu.Unlock()
+
+		select {
+		case <-idle:
+		case <-ctx.Done():
+			return fmt.Errorf("aish: wait: %w", ctx.Err())
+		}
+	}
+}
+
+// becameIdle wakes waitIdle; the caller holds s.mu.
+func (s *session) becameIdle() {
+	close(s.idle)
+	s.idle = make(chan struct{})
 }
 
 // startContext is the context given to Start: Emit with it queues a
@@ -150,11 +196,15 @@ func (s *session) seed(txs []Tx) error {
 // everything still queued with ErrClosed.
 func (s *session) close() {
 	s.mu.Lock()
+	wasRunning := s.running
 	s.closed = true
+	s.becameIdle()
 	s.mu.Unlock()
 	s.cancel()
 	s.signal()
-	<-s.stopped
+	if wasRunning {
+		<-s.stopped
+	}
 }
 
 func (s *session) signal() {
@@ -173,6 +223,13 @@ func (s *session) run() {
 			return
 		}
 		s.runTx(p)
+
+		s.mu.Lock()
+		s.busy = false
+		if len(s.queue) == 0 {
+			s.becameIdle()
+		}
+		s.mu.Unlock()
 	}
 }
 
@@ -197,6 +254,7 @@ func (s *session) next() *pending {
 			p := s.queue[0]
 			s.queue = s.queue[1:]
 			p.started = true
+			s.busy = true
 			s.mu.Unlock()
 
 			return p
@@ -238,12 +296,22 @@ func (s *session) await(ctx context.Context, p *pending) error {
 			s.mu.Lock()
 			if !p.started {
 				s.queue = slices.DeleteFunc(s.queue, func(q *pending) bool { return q == p })
+				if !s.busy && len(s.queue) == 0 {
+					s.becameIdle()
+				}
 			}
 			s.mu.Unlock()
 
 			return fmt.Errorf("aish: emit: %w", ctx.Err())
 		case <-warn.C:
-			s.warnPossibleDeadlock(p.source)
+			// Once its own transaction runs, a hook of the same instance is
+			// expected (a frontend showing the message it emitted).
+			s.mu.Lock()
+			queued := !p.started
+			s.mu.Unlock()
+			if queued {
+				s.warnPossibleDeadlock(p.source)
+			}
 		}
 	}
 }

@@ -1,0 +1,11 @@
+tx 2 committed
+  emit      2.1 tool.call test.driver
+  change    2.1 tool.call tool.fs:effects
+  remove    2.1 tool.call policy.test:authorize
+    emit      2.2 user.question policy.test:authorize
+    unhandled 2.2 user.question
+    emit      2.1 tool.call policy.test:authorize
+    unhandled 2.1 tool.call
+    emit      2.3 tool.result policy.test:authorize
+    unhandled 2.3 tool.result
+events: 2.2 user.question, 2.1 tool.call, 2.3 tool.result

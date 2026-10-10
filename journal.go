@@ -43,11 +43,15 @@ const (
 	TraceWarn      TraceAction = "warn"      // suspected misuse, see Err
 )
 
-// TraceEntry is one step of event delivery inside a transaction.
+// TraceEntry is one step of event delivery inside a transaction. Entries are
+// in the order the steps began: a hook call comes before the events it
+// emitted, which have a greater Depth.
 type TraceEntry struct {
-	Event  string // Meta.ID
-	Kind   string
-	Hook   string // "<instance>:<name>"; empty for core actions
+	Event string // Meta.ID
+	Kind  string
+	// Hook is the hook ("<instance>:<name>") that got the event; for
+	// TraceEmit it is Meta.Source, the emitter. Empty for core actions.
+	Hook   string
 	Action TraceAction
 	Depth  int // nesting depth of the Emit, root events have depth 1
 	Err    string

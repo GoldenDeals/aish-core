@@ -18,13 +18,18 @@ var (
 	ErrStaleContext = errors.New("aish: hook context used outside its running hook")
 
 	// ErrConcurrentEmit is returned by Emit when the hook that owns ctx is
-	// already emitting from another goroutine. Hooks of a session run one at
-	// a time, so a hook emits from one goroutine at a time too.
-	ErrConcurrentEmit = errors.New("aish: hook context already emitting in another goroutine")
+	// still inside an Emit: called from another goroutine, or by a nested
+	// hook that captured the outer hook's ctx. Hooks of a session run one at
+	// a time, so a hook emits one Emit at a time too.
+	ErrConcurrentEmit = errors.New("aish: hook context is already emitting")
 
 	// ErrLimit is the cause of a transaction cancelled because it exceeded the
 	// nesting depth or the number of events.
 	ErrLimit = errors.New("aish: transaction limit exceeded")
+
+	// ErrNotStarted is returned by Emit with the Init context: modules emit
+	// only once every module has subscribed.
+	ErrNotStarted = errors.New("aish: emit before the session started")
 
 	// ErrClosed is returned by Emit after the session was closed.
 	ErrClosed = errors.New("aish: session closed")

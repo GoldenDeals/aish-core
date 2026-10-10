@@ -26,6 +26,7 @@ type txState struct {
 	cancel context.CancelCauseFunc
 
 	records []*record
+	emitted int // events delivered so far, re-emits included; module.error is not counted
 	seen    map[seenKey]struct{}
 	lastID  int
 
@@ -57,11 +58,26 @@ func (tx *txState) newID() string {
 	return fmt.Sprintf("%d.%d", tx.seq, tx.lastID)
 }
 
-func (tx *txState) addTrace(e TraceEntry) {
+// addTrace appends an entry and returns its index for finishTrace.
+func (tx *txState) addTrace(e TraceEntry) int {
 	tx.mu.Lock()
 	defer tx.mu.Unlock()
 
 	tx.trace = append(tx.trace, e)
+
+	return len(tx.trace) - 1
+}
+
+// finishTrace completes the entry of a hook call. The entry is added when
+// the hook starts, so the events it emits follow it in the trace.
+func (tx *txState) finishTrace(i int, action TraceAction, err error, dur time.Duration) {
+	tx.mu.Lock()
+	defer tx.mu.Unlock()
+
+	if i >= len(tx.trace) {
+		return
+	}
+	tx.trace[i].Action, tx.trace[i].Err, tx.trace[i].Dur = action, errText(err), dur
 }
 
 func (tx *txState) emitNested(info *ctxInfo, source string, opts EmitOpts, evs []Event) error {
@@ -111,7 +127,7 @@ func (tx *txState) deliver(ev Event, opts EmitOpts, sender *hook, source string,
 	kind := ev.Kind()
 
 	switch {
-	case len(tx.records) >= maxEvents:
+	case tx.emitted >= maxEvents:
 		return tx.limit(meta.ID, kind, depth, fmt.Errorf("%w: more than %d events", ErrLimit, maxEvents))
 	case depth > maxDepth:
 		return tx.limit(meta.ID, kind, depth, fmt.Errorf("%w: emit nested deeper than %d", ErrLimit, maxDepth))
@@ -119,16 +135,13 @@ func (tx *txState) deliver(ev Event, opts EmitOpts, sender *hook, source string,
 
 	rec := &record{env: Envelope{Meta: meta, Event: ev}}
 	tx.records = append(tx.records, rec)
+	tx.emitted++
 	if err := tx.cancelled(); err != nil {
 		tx.addTrace(TraceEntry{Event: meta.ID, Kind: kind, Action: TraceCancelled, Depth: depth})
 
 		return err
 	}
-	entry := TraceEntry{Event: meta.ID, Kind: kind, Action: TraceEmit, Depth: depth}
-	if sender != nil {
-		entry.Hook = sender.info.ID
-	}
-	tx.addTrace(entry)
+	tx.addTrace(TraceEntry{Event: meta.ID, Kind: kind, Hook: source, Action: TraceEmit, Depth: depth})
 
 	var errs []error
 	handled := false
@@ -168,7 +181,7 @@ func (tx *txState) deliver(ev Event, opts EmitOpts, sender *hook, source string,
 	switch err := tx.cancelled(); {
 	case err != nil:
 		errs = append(errs, err)
-	case !handled:
+	case !handled && allowedModes(ev) != ModeObserve: // core events have no Mutate or Handle hooks by design
 		tx.addTrace(TraceEntry{Event: meta.ID, Kind: kind, Action: TraceUnhandled, Depth: depth})
 		errs = append(errs, fmt.Errorf("%w: %s", ErrUnhandled, kind))
 	}
@@ -208,6 +221,9 @@ func (tx *txState) admit(hk *hook, rec *record, ev Event, opts EmitOpts, sender 
 func (tx *txState) runMutate(hk *hook, rec *record, depth int) error {
 	before := deepcopy.Copy(rec.env.Event)
 	var removed bool
+	entry := tx.addTrace(TraceEntry{
+		Event: rec.env.Meta.ID, Kind: rec.env.Event.Kind(), Hook: hk.info.ID, Action: TraceMutate, Depth: depth,
+	})
 	dur, err := tx.invoke(hk, rec.env.Meta, depth, func(ctx context.Context) error {
 		out, rm, err := hk.mutate(ctx, rec.env.Event, rec.env.Meta)
 		rec.env.Event, removed = out, rm
@@ -222,10 +238,7 @@ func (tx *txState) runMutate(hk *hook, rec *record, depth int) error {
 	case !deepcopy.Equal(before, rec.env.Event):
 		action = TraceChange
 	}
-	tx.addTrace(TraceEntry{
-		Event: rec.env.Meta.ID, Kind: rec.env.Event.Kind(), Hook: hk.info.ID,
-		Action: action, Depth: depth, Err: errText(err), Dur: dur,
-	})
+	tx.finishTrace(entry, action, err, dur)
 	rec.removed = removed
 	if err != nil {
 		return tx.hookFailed(hk, err)
@@ -235,13 +248,13 @@ func (tx *txState) runMutate(hk *hook, rec *record, depth int) error {
 }
 
 func (tx *txState) runHandle(hk *hook, rec *record, ev Event, depth int) error {
+	entry := tx.addTrace(TraceEntry{
+		Event: rec.env.Meta.ID, Kind: rec.env.Event.Kind(), Hook: hk.info.ID, Action: TraceHandle, Depth: depth,
+	})
 	dur, err := tx.invoke(hk, rec.env.Meta, depth, func(ctx context.Context) error {
 		return hk.handle(ctx, ev)
 	})
-	tx.addTrace(TraceEntry{
-		Event: rec.env.Meta.ID, Kind: rec.env.Event.Kind(), Hook: hk.info.ID,
-		Action: TraceHandle, Depth: depth, Err: errText(err), Dur: dur,
-	})
+	tx.finishTrace(entry, TraceHandle, err, dur)
 	if err != nil {
 		return tx.hookFailed(hk, err)
 	}

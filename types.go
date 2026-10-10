@@ -81,7 +81,8 @@ func (r *LLMRequest) Section(name string) *Section {
 	return s
 }
 
-// Message is one message of the model conversation, as Transcript builds it.
+// Message is one message of the model conversation, as transcript.Build
+// builds it.
 type Message struct {
 	Role    string // RoleUser or RoleAssistant
 	Content []Block
@@ -96,10 +97,11 @@ const (
 type Block struct {
 	Type string
 
-	Text string // BlockText
+	Text      string // BlockText; BlockThinking: the thinking text
+	Signature string // BlockThinking: the provider signs thinking and needs it back unchanged
 
 	MediaType string // BlockImage
-	Data      []byte // BlockImage
+	Data      []byte // BlockImage; BlockRedactedThinking: opaque provider data
 
 	ID    string          // BlockToolUse: ToolCall.ID
 	Name  string          // BlockToolUse
@@ -111,10 +113,12 @@ type Block struct {
 }
 
 const (
-	BlockText       = "text"
-	BlockImage      = "image"
-	BlockToolUse    = "tool_use"
-	BlockToolResult = "tool_result"
+	BlockText             = "text"
+	BlockThinking         = "thinking"
+	BlockRedactedThinking = "redacted_thinking"
+	BlockImage            = "image"
+	BlockToolUse          = "tool_use"
+	BlockToolResult       = "tool_result"
 )
 
 // AssistantMessage is the streamed text of one model turn. Tool calls of the
@@ -125,20 +129,28 @@ type AssistantMessage struct {
 	Content  Stream[ContentDelta]
 }
 
-// ContentDelta is one chunk of an assistant message. The provider ends the
-// stream with a DeltaStop chunk carrying the stop reason and usage, which
-// are known only at the end.
+// ContentDelta is one chunk of an assistant message.
+//
+// Consecutive DeltaText chunks form one text block and consecutive
+// DeltaThinking chunks one thinking block; DeltaSignature signs and closes
+// the open thinking block. DeltaRedactedThinking is a whole block. The
+// provider ends the stream with a DeltaStop chunk carrying the stop reason
+// and usage, which are known only at the end.
 type ContentDelta struct {
 	Type       string
 	Text       string // DeltaText, DeltaThinking
+	Signature  string // DeltaSignature
+	Data       []byte // DeltaRedactedThinking
 	StopReason string // DeltaStop: "end_turn", "tool_use", "max_tokens"
 	Usage      *Usage // DeltaStop
 }
 
 const (
-	DeltaText     = "text"
-	DeltaThinking = "thinking"
-	DeltaStop     = "stop"
+	DeltaText             = "text"
+	DeltaThinking         = "thinking"
+	DeltaSignature        = "signature"
+	DeltaRedactedThinking = "redacted_thinking"
+	DeltaStop             = "stop"
 )
 
 type Usage struct {
@@ -158,6 +170,52 @@ func (m AssistantMessage) Text() string {
 	}
 
 	return b.String()
+}
+
+// Blocks assembles the chunks written so far into text, thinking and
+// redacted thinking blocks, in stream order. A thinking block without a
+// signature (the turn was cut off) is dropped: the provider would reject it.
+// Empty text blocks are dropped too.
+func (m AssistantMessage) Blocks() []Block {
+	var out []Block
+	open := "" // BlockText or BlockThinking while chunks append to text
+	var text strings.Builder
+	finish := func(signature string) {
+		switch {
+		case open == BlockText && text.Len() > 0:
+			out = append(out, Block{Type: BlockText, Text: text.String()})
+		case open == BlockThinking && signature != "":
+			out = append(out, Block{Type: BlockThinking, Text: text.String(), Signature: signature})
+		}
+		open = ""
+		text.Reset()
+	}
+
+	for _, d := range m.Content.Body() {
+		switch d.Type {
+		case DeltaText, DeltaThinking:
+			typ := BlockText
+			if d.Type == DeltaThinking {
+				typ = BlockThinking
+			}
+			if open != typ {
+				finish("")
+				open = typ
+			}
+			text.WriteString(d.Text)
+		case DeltaSignature:
+			if open == BlockThinking {
+				finish(d.Signature)
+			}
+		case DeltaRedactedThinking:
+			finish("")
+			out = append(out, Block{Type: BlockRedactedThinking, Data: d.Data})
+		default: // DeltaStop and unknown chunks carry no content
+		}
+	}
+	finish("")
+
+	return out
 }
 
 // Stop returns the final DeltaStop chunk, if the stream has one.
@@ -206,7 +264,7 @@ type ToolResult struct {
 }
 
 // Compacted replaces everything up to transaction UpTo with Summary when
-// Transcript builds messages.
+// transcript.Build builds messages.
 type Compacted struct {
 	UpTo    uint64
 	Summary string
