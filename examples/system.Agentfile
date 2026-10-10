@@ -1,0 +1,25 @@
+max_steps 50
+max_depth 2
+agent loop
+
+log {
+    file .agents/logs/%D/%T-%s.log level debug rotate 24h
+    trace .agents/traces/%D/%H-%s.trace rotate 1h
+}
+
+llm anthropic {
+    api_key "{$ANTHROPIC_API_KEY}"
+    base_url http://127.0.0.1:8317
+}
+
+context {
+    system_prompt
+    agents_md AGENTS.md home local pattern CLAUDE.md
+    skills ./.agents/skills ./examples/skills
+}
+
+policy cedar ./examples/policies/allow-all.cedar
+
+pragma frontend cli
+pragma store jsonl .agents/sessions
+pragma subagents core communication
