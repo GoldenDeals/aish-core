@@ -1,14 +1,3 @@
-# Пример конфигурации MVP. Пути в нём считаются от корня репозитория.
-#
-#   aish --config examples/Agentfile                 # новая сессия
-#   aish --config examples/Agentfile --resume <ID>   # продолжить сессию
-#   aish --config examples/Agentfile --trace t.log   # trace каждой транзакции пишется в t.log сразу после коммита
-#
-# Поддерживается один блок агента: main. Директива «<namespace> <name> [args] { ... }»
-# подключает модуль <namespace>.<name>; список модулей сборки выводит `aish list-modules`.
-# Секреты задаются только через {$ENV}.
-
-# Сниппет: подключается строкой «import files».
 (files) {
     tool fs_read
     tool fs_edit {
@@ -17,19 +6,19 @@
 }
 
 main {
-    # Шагов агента (запросов к модели) на одно сообщение пользователя.
     max_steps 50
-
     agent loop
-
-    # Системный промпт: без аргументов встроенный; иначе «context system_prompt файл.md»
-    # или блок { text "..." }.
     context system_prompt
+    context agents_md AGENTS.md {
+        home
+        # walk
+        local
+    }
+
     frontend cli
 
-    # Ключ можно не указывать: SDK читает ANTHROPIC_API_KEY или профиль `ant auth login`.
     llm anthropic {
-        model claude-opus-5-5
+        model claude-haiku-5-5
         api_key {$ANTHROPIC_API_KEY}
         base_url http://127.0.0.1:8317
     }
@@ -37,19 +26,12 @@ main {
     import files
     tool bash
 
-    # Запись, кроме чтения, подтверждается пользователем.
-    policy ask
-    # Вместо ask: правила на Cedar, см. §8 в ARCHITECTURE.md.
-    # policy cedar ./examples/policies/ask-all.cedar
-
-    # Agent Skills: директории со SKILL.md внутри поддиректорий.
+    policy cedar ./examples/policies/allow-all.cedar
     context skills ./.agents/skills ./examples/skills
 
-    # MCP-сервер: одна директива на сервер, tools называются mcp__<server>__<tool>.
-    # tool mcp github {
-    #     command github-mcp-server stdio
-    # }
+    tool mcp exa {
+        url https://mcp.exa.ai/mcp?exaApiKey={$EXA_API_KEY}
+    }
 
-    # Журнал сессий; по умолчанию ~/.aish/sessions.
-    store jsonl ~/.aish/sessions
+    store jsonl .agents/sessions
 }

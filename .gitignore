@@ -3,3 +3,5 @@
 aish
 trace.txt
 externtions/
+*.log
+test/
