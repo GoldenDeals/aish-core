@@ -11,7 +11,7 @@ go tool golangci-lint run ./...                          # линт, как в C
 go tool golangci-lint fmt                                # формат: gofumpt + goimports
 go test -race -count=1 ./...                             # тесты, как в CI
 go test -race -count=1 -run '^TestName$' ./path/to/pkg   # один тест
-go run ./cmd/aish --config docs/example.Caddyfile        # запуск (флаги: --resume ID, --trace FILE; подкоманда list-modules)
+go run ./cmd/aish --config examples/Agentfile        # запуск (флаги: --resume ID, --trace FILE; подкоманда list-modules)
 ```
 
 CI (`.github/workflows/ci.yml`) сначала запускает линт, потом тесты с `-race`.
@@ -51,7 +51,7 @@ CI (`.github/workflows/ci.yml`) сначала запускает линт, по
 
 - `aish` (корень) — ядро; `events` — общие типы событий; `transcript`, `trace` — хелперы; `test` — тестовые хелперы (`NewSession`, `NewSessionWith`, `Frontend`, `FakeLLM`).
 - `modules/<namespace>/<name>` — модули (`agent/loop`, `frontend/cli`, `policy/ask`, `store/jsonl`, `tool/fs`); `modules/standard` линкует стандартную сборку. Новый модуль регистрируется в `init()` и добавляется в `modules/standard`.
-- `config` — загрузчик Caddyfile; `app` — запуск сессии (флаги, логи, сигналы); `cmd/aish` — точка входа со стандартной сборкой; `cmd/aish-build` — сборка бинаря с другим набором модулей. Список стандартных модулей — только импорты в `modules/standard`: `aish-build` читает его оттуда. Модуль читает свою директиву в `UnmarshalCaddyfile` (`Dispenser` стоит на первом токене директивы, имя модуля пропускай `d.NextArg()`), аргументы разбирай через `RemainingArgs` (`NextArg` возвращает и `{`).
+- `config` — загрузчик Agentfile; `app` — запуск сессии (флаги, логи, сигналы); `cmd/aish` — точка входа со стандартной сборкой; `cmd/aish-build` — сборка бинаря с другим набором модулей. Список стандартных модулей — только импорты в `modules/standard`: `aish-build` читает его оттуда. Модуль читает свою директиву в `UnmarshalCaddyfile` (`Dispenser` стоит на первом токене директивы, имя модуля пропускай `d.NextArg()`), аргументы разбирай через `RemainingArgs` (`NextArg` возвращает и `{`).
 
 ### События и хуки
 
@@ -78,5 +78,5 @@ CI (`.github/workflows/ci.yml`) сначала запускает линт, по
 - `LLMRequest.Messages` и `Tx.Trace` в журнал и на диск не пишутся (`json:"-"`).
 
 - Модули пишут логи только через `h.Log()` (`slog`), а не в stdout/stderr: терминал принадлежит фронтенду.
-- Конфиг пишется в формате Caddyfile и разбирается `github.com/coredns/caddy/caddyfile`, а не Caddy v2. Пример лежит в `docs/example.Caddyfile`. §7 ещё будет пересмотрен.
+- Конфиг (`Agentfile`) пишется в синтаксисе Caddyfile и разбирается `github.com/coredns/caddy/caddyfile`, а не Caddy v2. Пример лежит в `examples/Agentfile`. §7 ещё будет пересмотрен.
 - Инварианты, которые должны покрывать тесты ядра, перечислены в §10.

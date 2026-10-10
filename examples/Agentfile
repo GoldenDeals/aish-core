@@ -1,8 +1,8 @@
-# Пример конфигурации MVP.
+# Пример конфигурации MVP. Пути в нём считаются от корня репозитория.
 #
-#   aish --config docs/example.Caddyfile                 # новая сессия
-#   aish --config docs/example.Caddyfile --resume <ID>   # продолжить сессию
-#   aish --config docs/example.Caddyfile --trace t.log   # trace каждой транзакции пишется в t.log сразу после коммита
+#   aish --config examples/Agentfile                 # новая сессия
+#   aish --config examples/Agentfile --resume <ID>   # продолжить сессию
+#   aish --config examples/Agentfile --trace t.log   # trace каждой транзакции пишется в t.log сразу после коммита
 #
 # Поддерживается один блок агента: main. Директива «<namespace> <name> [args] { ... }»
 # подключает модуль <namespace>.<name>; список модулей сборки выводит `aish list-modules`.
@@ -39,6 +39,16 @@ main {
 
     # Запись, кроме чтения, подтверждается пользователем.
     policy ask
+    # Вместо ask: правила на Cedar, см. §8 в ARCHITECTURE.md.
+    # policy cedar ./examples/policies/ask-all.cedar
+
+    # Agent Skills: директории со SKILL.md внутри поддиректорий.
+    context skills ./.agents/skills ./examples/skills
+
+    # MCP-сервер: одна директива на сервер, tools называются mcp__<server>__<tool>.
+    # tool mcp github {
+    #     command github-mcp-server stdio
+    # }
 
     # Журнал сессий; по умолчанию ~/.aish/sessions.
     store jsonl ~/.aish/sessions

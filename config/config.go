@@ -1,4 +1,4 @@
-// Package config turns a Caddyfile into the options and module instances of
+// Package config turns an Agentfile (Caddyfile syntax) into the options and module instances of
 // one session.
 package config
 
@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	mainAgent   = "main"
-	maxStepsOpt = "max_steps"
-	idSeparator = "."
+	mainAgent         = "main"
+	maxStepsOpt       = "max_steps"
+	idSeparator       = "."
+	instanceSeparator = "/"
 )
 
 type Config struct {
@@ -30,8 +31,8 @@ type Config struct {
 // Load reads the agent block "main": every directive "<namespace> <name>
 // [args] [{ ... }]" creates the module <namespace>.<name> and hands the
 // directive to its UnmarshalCaddyfile. The directive "max_steps N" sets
-// Options.MaxSteps. Subagent blocks and named instances are not supported
-// yet (§7 is under revision).
+// Options.MaxSteps. Subagent blocks are not supported
+// yet; a module names its instance via InstanceName (§7 is under revision).
 func Load(filename string, r io.Reader) (*Config, error) {
 	blocks, err := caddyfile.Parse(filename, r, nil)
 	if err != nil {
@@ -131,6 +132,11 @@ func (c *Config) add(filename string, st []caddyfile.Token) error {
 		}
 	} else if d.NextArg() || d.NextBlock() {
 		return d.Errf("module %s takes no arguments", id)
+	}
+	// A module that is configured once per server and not once per session
+	// names its instances itself: "tool mcp github" is tool.mcp/github.
+	if n, ok := m.(interface{ InstanceName() string }); ok && n.InstanceName() != "" {
+		id += instanceSeparator + n.InstanceName()
 	}
 	c.Instances = append(c.Instances, aish.Instance{Name: id, Module: m})
 

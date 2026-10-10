@@ -32,7 +32,7 @@ main {
 func TestLoad(t *testing.T) {
 	t.Setenv("TEST_AISH_STORE", "/var/aish")
 
-	cfg, err := config.Load("Caddyfile", strings.NewReader(caddyfile))
+	cfg, err := config.Load("Agentfile", strings.NewReader(caddyfile))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestLoadErrors(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			if _, err := config.Load("Caddyfile", strings.NewReader(in)); err == nil {
+			if _, err := config.Load("Agentfile", strings.NewReader(in)); err == nil {
 				t.Fatal("no error")
 			}
 		})
@@ -81,17 +81,40 @@ func TestLoadErrors(t *testing.T) {
 func TestExampleLoads(t *testing.T) {
 	t.Parallel()
 
-	f, err := os.Open("../docs/example.Caddyfile")
+	f, err := os.Open("../examples/Agentfile")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
 
-	cfg, err := config.Load("example.Caddyfile", f)
+	cfg, err := config.Load("Agentfile", f)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Options.MaxSteps != 50 || len(cfg.Instances) != 8 {
+	if cfg.Options.MaxSteps != 50 || len(cfg.Instances) != 10 {
 		t.Fatalf("options %+v, %d instances", cfg.Options, len(cfg.Instances))
+	}
+}
+
+func TestNamedInstances(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.Load("Agentfile", strings.NewReader(`main {
+    tool mcp github {
+        command github-mcp-server stdio
+    }
+    tool mcp docs {
+        url http://localhost:1/mcp
+    }
+}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(cfg.Instances))
+	for _, inst := range cfg.Instances {
+		names = append(names, inst.Name)
+	}
+	if got := strings.Join(names, " "); got != "tool.mcp/github tool.mcp/docs" {
+		t.Errorf("instances = %s", got)
 	}
 }

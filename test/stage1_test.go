@@ -139,6 +139,12 @@ func llmScript() *test.FakeLLM {
 func session(t *testing.T, id, resume, dir, files string, llm *test.FakeLLM, fe aish.Instance) *test.Session {
 	t.Helper()
 
+	return sessionWith(t, aish.Instance{Name: "policy.ask", Module: &ask.Policy{}}, id, resume, dir, files, llm, fe)
+}
+
+func sessionWith(t *testing.T, policy aish.Instance, id, resume, dir, files string, llm *test.FakeLLM, fe aish.Instance) *test.Session {
+	t.Helper()
+
 	reader, editor := &fs.Read{}, &fs.Edit{}
 	reader.Root, editor.Root = files, files
 
@@ -150,7 +156,7 @@ func session(t *testing.T, id, resume, dir, files string, llm *test.FakeLLM, fe 
 			{Name: "llm.fake", Module: llm},
 			{Name: "tool.fs_read", Module: reader},
 			{Name: "tool.fs_edit", Module: editor},
-			{Name: "policy.ask", Module: &ask.Policy{}},
+			policy,
 			{Name: "store.jsonl", Module: &jsonl.Store{Dir: dir}},
 			fe,
 		},

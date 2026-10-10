@@ -122,14 +122,8 @@ func (s *Session) Start() error {
 	}
 	s.started = true
 
-	initCtx := s.s.initContext()
-	for i, inst := range s.instances {
-		if err := safeCall(func() error { return inst.Module.Init(initCtx, s.hosts[i]) }); err != nil {
-			stopErr := s.closeLocked(context.Background())
-
-			return errors.Join(fmt.Errorf("aish: init %s: %w", inst.Name, err), stopErr)
-		}
-		s.inited = i + 1
+	if err := s.initLocked(); err != nil {
+		return err
 	}
 
 	s.s.start()
@@ -147,6 +141,41 @@ func (s *Session) Start() error {
 	}
 
 	return s.s.emitCore(SessionStarted(s.s.info))
+}
+
+func (s *Session) initLocked() error {
+	initCtx := s.s.initContext()
+	for i, inst := range s.instances {
+		if err := safeCall(func() error { return inst.Module.Init(initCtx, s.hosts[i]) }); err != nil {
+			stopErr := s.closeLocked(context.Background())
+
+			return errors.Join(fmt.Errorf("aish: init %s: %w", inst.Name, err), stopErr)
+		}
+		s.inited = i + 1
+	}
+
+	return nil
+}
+
+// Hooks runs Init on every instance without starting the bus or the modules,
+// returns all subscriptions and closes the session. It backs `aish list-hooks`.
+func (s *Session) Hooks() ([]HookInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	switch {
+	case s.closed:
+		return nil, ErrClosed
+	case s.started:
+		return nil, errors.New("aish: session started twice")
+	}
+	s.started = true
+	if err := s.initLocked(); err != nil {
+		return nil, err
+	}
+	hooks := s.s.hooks.infos("", true)
+
+	return hooks, s.closeLocked(context.Background())
 }
 
 // Wait blocks until the session is idle: no transaction is open or queued.
