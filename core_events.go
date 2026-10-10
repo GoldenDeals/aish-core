@@ -24,10 +24,20 @@ type ModuleError struct {
 	Error    string
 }
 
-func (TxStarted) Kind() string   { return "tx.started" }
-func (TxCommitted) Kind() string { return "tx.committed" }
-func (ModuleError) Kind() string { return "module.error" }
+// SessionStarted is journaled when the session starts, after every module
+// has started.
+type SessionStarted struct {
+	ID     string
+	Agent  string // agent block: "main", "reviewer"
+	Parent string // parent session ID of a subagent
+}
 
-func (TxStarted) allowedModes() Mode   { return ModeObserve }
-func (TxCommitted) allowedModes() Mode { return ModeObserve }
-func (ModuleError) allowedModes() Mode { return ModeObserve }
+func (TxStarted) Kind() string      { return "tx.started" }
+func (TxCommitted) Kind() string    { return "tx.committed" }
+func (ModuleError) Kind() string    { return "module.error" }
+func (SessionStarted) Kind() string { return "session.started" }
+
+func (TxStarted) allowedModes() Mode      { return ModeObserve }
+func (TxCommitted) allowedModes() Mode    { return ModeObserve }
+func (ModuleError) allowedModes() Mode    { return ModeObserve }
+func (SessionStarted) allowedModes() Mode { return ModeObserve }

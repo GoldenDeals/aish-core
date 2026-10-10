@@ -20,6 +20,11 @@ func (h *Host) Instance() string { return h.instance }
 
 func (h *Host) Journal() *Journal { return &h.sess.journal }
 
+// Seed appends restored transactions to the journal (§4.8). It runs no hooks
+// and emits no tx.committed, so tools do not run again and a store does not
+// write the transactions twice. It is allowed only in Init.
+func (h *Host) Seed(txs ...Tx) error { return h.sess.seed(txs) }
+
 // Cancel cancels the open transaction, if any (Ctrl+C). Its hooks see a
 // cancelled ctx, and it commits with StatusCancelled and everything that
 // happened before.
@@ -129,6 +134,9 @@ func (s *session) checkEmit(ev Event) error {
 	}
 	if _, ok := ev.(Envelope); ok {
 		return errors.New("aish: emit of a nested Envelope")
+	}
+	if ev.Kind() == "" {
+		return fmt.Errorf("aish: event type %T has an empty Kind", ev)
 	}
 	if allowedModes(ev) == ModeObserve {
 		return fmt.Errorf("aish: %s events are emitted only by the core", ev.Kind())

@@ -10,7 +10,7 @@ import (
 )
 
 type message struct {
-	Stream[string]
+	Text Stream[string]
 	Stop string
 }
 
@@ -127,12 +127,12 @@ func TestCommitWaitsForStreams(t *testing.T) {
 
 	var shown []string
 	h.Handle("show", func(ctx context.Context, m message) error {
-		shown = drain(m.Chunks(ctx))
+		shown = drain(m.Text.Chunks(ctx))
 
 		return nil
 	})
 	var observed []string
-	h.Observe("store", func(_ context.Context, m message) { observed = m.Body() })
+	h.Observe("store", func(_ context.Context, m message) { observed = m.Text.Body() })
 
 	stream, w := NewStream[string]()
 	live, lw := NewStream[[]byte]()
@@ -150,7 +150,7 @@ func TestCommitWaitsForStreams(t *testing.T) {
 		close(closed)
 	}()
 
-	err := h.Emit(ctx, message{Stream: stream, Stop: "end_turn"}, output{Live: &live}, output{})
+	err := h.Emit(ctx, message{Text: stream, Stop: "end_turn"}, output{Live: &live}, output{})
 	if !errors.Is(err, ErrUnhandled) { // nobody handles output
 		t.Fatalf("Emit = %v, want only ErrUnhandled for output", err)
 	}
@@ -183,7 +183,7 @@ func TestCancelClosesOpenStreams(t *testing.T) {
 		}()
 	})
 
-	err := h.Emit(ctx, message{Stream: stream})
+	err := h.Emit(ctx, message{Text: stream})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Emit = %v, want context.Canceled", err)
 	}
@@ -194,7 +194,7 @@ func TestCancelClosesOpenStreams(t *testing.T) {
 	if tx.Status != StatusCancelled {
 		t.Errorf("status = %s, want cancelled", tx.Status)
 	}
-	if body := tx.Events[0].Event.(message).Body(); !slices.Equal(body, []string{"partial"}) {
+	if body := tx.Events[0].Event.(message).Text.Body(); !slices.Equal(body, []string{"partial"}) {
 		t.Errorf("journaled body = %v, want what was written before cancellation", body)
 	}
 	if !slices.ContainsFunc(tx.Trace, func(e TraceEntry) bool { return e.Action == TraceAbort }) {
@@ -202,16 +202,38 @@ func TestCancelClosesOpenStreams(t *testing.T) {
 	}
 }
 
-func TestStreamEventsRejectMutate(t *testing.T) {
+// TestMutateMayReplaceStream: a Mutate hook may wrap a stream (to redact
+// secrets, say); the commit then waits for the stream it put in.
+func TestMutateMayReplaceStream(t *testing.T) {
 	t.Parallel()
-	s, _ := newTestSession(t)
+	s, ctx := newTestSession(t)
 	h := s.host("m")
-	h.Mutate("live", func(context.Context, *Mut[output]) error { return nil })
 
-	defer func() {
-		if r := recover(); r == nil || !strings.Contains(r.(string), "does not support mutate") {
-			t.Errorf("Mutate on a stream event: recover() = %v, want a panic", r)
-		}
+	h.Mutate("redact", func(ctx context.Context, m *Mut[message]) error {
+		in := m.Event().Text
+		out, w := NewStream[string]()
+		go func() {
+			for c := range in.Chunks(ctx) {
+				w.Write(strings.ReplaceAll(c, "secret", "***"))
+			}
+			w.Close(in.Err())
+		}()
+		m.Event().Text = out
+
+		return nil
+	})
+
+	stream, w := NewStream[string]()
+	go func() {
+		w.Write("the secret is 42")
+		w.Close(nil)
 	}()
-	h.Mutate("rewrite", func(context.Context, *Mut[message]) error { return nil })
+	if err := h.Emit(ctx, message{Text: stream}); !errors.Is(err, ErrUnhandled) && err != nil {
+		t.Fatal(err)
+	}
+
+	body := s.lastTx(t).Events[0].Event.(message).Text.Body()
+	if !slices.Equal(body, []string{"the *** is 42"}) {
+		t.Errorf("journaled body = %v, want the redacted stream", body)
+	}
 }

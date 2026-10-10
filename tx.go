@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"slices"
 	"sync"
 	"time"
@@ -220,7 +219,7 @@ func (tx *txState) runMutate(hk *hook, rec *record, depth int) error {
 	switch {
 	case removed:
 		action = TraceRemove
-	case !reflect.DeepEqual(before, rec.env.Event):
+	case !deepcopy.Equal(before, rec.env.Event):
 		action = TraceChange
 	}
 	tx.addTrace(TraceEntry{

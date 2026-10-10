@@ -72,6 +72,7 @@ type session struct {
 	queue   []*pending
 	cur     *txState
 	lastSeq uint64
+	running bool // transactions may run; Seed is no longer allowed
 	closed  bool
 
 	wake    chan struct{}
@@ -114,7 +115,35 @@ func (s *session) startContext() context.Context {
 
 // Emit before start only queues.
 func (s *session) start() {
+	s.mu.Lock()
+	s.running = true
+	s.mu.Unlock()
 	go s.run()
+}
+
+// seed appends restored transactions to the journal without running hooks.
+// It is allowed only before the session starts, so no transaction is open
+// and sequence numbers continue after the seeded ones.
+func (s *session) seed(txs []Tx) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.running {
+		return errors.New("aish: Seed is allowed only in Init")
+	}
+	last := s.lastSeq
+	for _, tx := range txs {
+		if tx.Seq <= last {
+			return fmt.Errorf("aish: seed: transaction %d after %d; sequence numbers must increase", tx.Seq, last)
+		}
+		last = tx.Seq
+	}
+	for _, tx := range txs {
+		s.journal.append(tx)
+	}
+	s.lastSeq = last
+
+	return nil
 }
 
 // close cancels the open transaction, waits for it to commit and fails

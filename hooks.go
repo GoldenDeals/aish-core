@@ -40,7 +40,7 @@ func (m Mode) String() string {
 }
 
 // modeRestricted is implemented by core event types that support only some
-// modes, and through an embedded Stream by stream events, which forbid Mutate.
+// modes.
 type modeRestricted interface {
 	allowedModes() Mode
 }
@@ -235,8 +235,15 @@ func kindOf[E Event]() (kind string, all bool) {
 	if t.Kind() == reflect.Interface {
 		panic(fmt.Sprintf("aish: cannot subscribe to interface type %v; use a concrete event type or aish.Event", t))
 	}
+	if t == reflect.TypeFor[Envelope]() {
+		panic(fmt.Sprintf("aish: cannot subscribe to %v; subscribe to the event type it wraps", t))
+	}
+	kind = zeroEvent[E]().Kind()
+	if kind == "" {
+		panic(fmt.Sprintf("aish: event type %v has an empty Kind", t))
+	}
 
-	return zeroEvent[E]().Kind(), false
+	return kind, false
 }
 
 // zeroEvent returns a zero E that is safe to call methods on: pointer types

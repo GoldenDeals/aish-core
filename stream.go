@@ -12,11 +12,10 @@ import (
 // (§4.6). It is a handle: copies share one buffer, so every Handle and
 // Observe hook reads the same stream without multiplying memory.
 //
-// An event embeds Stream by value (not by pointer) to become a stream event;
-// stream events support Handle and Observe hooks only, because chunks that
-// were already shown cannot be rewritten. A transaction commits only after
-// every stream reachable from its events through exported fields is closed;
-// on cancellation the core closes open streams with the cancellation error.
+// An event carries a stream in a named field. A transaction commits only
+// after every stream reachable from its events through exported fields is
+// closed; on cancellation the core closes open streams with the
+// cancellation error.
 //
 // The zero Stream is closed and empty.
 type Stream[C any] struct {
@@ -106,9 +105,6 @@ func (s Stream[C]) Err() error {
 	return s.b.err
 }
 
-// allowedModes is promoted to events that embed Stream.
-func (Stream[C]) allowedModes() Mode { return ModeHandle | ModeObserve }
-
 func (s Stream[C]) buffer() streamBuffer {
 	if s.b == nil {
 		return nil
@@ -192,8 +188,8 @@ type streamBuffer interface {
 	abort(err error)
 }
 
-// streamer is implemented by Stream and, through embedding, by stream
-// events; both return the same buffer, which streamsIn deduplicates.
+// streamer is implemented by Stream (and by a type that embeds it, which
+// returns the same buffer; streamsIn deduplicates).
 type streamer interface {
 	buffer() streamBuffer
 }
