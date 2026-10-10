@@ -10,6 +10,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/coredns/caddy/caddyfile"
 
 	aish "github.com/GoldenDeals/aish-core"
 )
@@ -46,14 +49,27 @@ type eventRecord struct {
 	Event json.RawMessage
 }
 
+// UnmarshalCaddyfile reads "store jsonl [dir]".
+func (s *Store) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
+	d.NextArg() // module name
+	switch args := d.RemainingArgs(); len(args) {
+	case 0:
+	case 1:
+		s.Dir = args[0]
+	default:
+		return d.ArgErr()
+	}
+	if d.NextBlock() {
+		return d.Err("store jsonl takes no block")
+	}
+
+	return nil
+}
+
 func (s *Store) Init(_ context.Context, h *aish.Host) error {
 	s.h = h
-	if s.Dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("aish: store.jsonl: %w", err)
-		}
-		s.Dir = filepath.Join(home, ".aish", "sessions")
+	if err := s.resolveDir(); err != nil {
+		return err
 	}
 	// A resumed session continues the file it was restored from.
 	id := h.Session().ID
@@ -85,6 +101,24 @@ func (s *Store) Init(_ context.Context, h *aish.Host) error {
 	}
 	s.file = f
 	h.Observe("write", s.write)
+
+	return nil
+}
+
+// resolveDir fills in the default directory and expands a leading "~".
+func (s *Store) resolveDir() error {
+	if s.Dir != "" && s.Dir != "~" && !strings.HasPrefix(s.Dir, "~/") {
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("aish: store.jsonl: %w", err)
+	}
+	if s.Dir == "" {
+		s.Dir = filepath.Join(home, ".aish", "sessions")
+	} else {
+		s.Dir = filepath.Join(home, s.Dir[1:])
+	}
 
 	return nil
 }
@@ -163,7 +197,6 @@ func (s *Store) restore(name string) error {
 		}
 		txs = append(txs, tx)
 	}
-	//nolint:staticcheck // SA4023 is wrong here: Seed returns nil on success, TestResume covers it
 	if err := s.h.Seed(txs...); err != nil {
 		return fmt.Errorf("aish: store.jsonl: %w", err)
 	}

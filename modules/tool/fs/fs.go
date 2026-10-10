@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/coredns/caddy/caddyfile"
+
 	aish "github.com/GoldenDeals/aish-core"
 	"github.com/GoldenDeals/aish-core/events"
 )
@@ -37,6 +39,28 @@ type tool struct {
 	readOnly bool
 	action   string // Access.Action
 	run      func(input json.RawMessage) (string, error)
+}
+
+// UnmarshalCaddyfile reads "tool <name> [root] { root <dir> }".
+func (t *tool) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
+	d.NextArg() // module name
+	switch args := d.RemainingArgs(); len(args) {
+	case 0:
+	case 1:
+		t.Root = args[0]
+	default:
+		return d.ArgErr()
+	}
+	for d.NextBlock() {
+		if d.Val() != "root" {
+			return d.Errf("unknown option %q", d.Val())
+		}
+		if !d.Args(&t.Root) {
+			return d.ArgErr()
+		}
+	}
+
+	return nil
 }
 
 func (t *tool) init(h *aish.Host) error {

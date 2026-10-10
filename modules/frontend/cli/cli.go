@@ -69,7 +69,7 @@ func (c *CLI) Start(ctx context.Context) error {
 	c.printHistory()
 
 	lines := make(chan string)
-	go readLines(in, lines)
+	go c.readLines(in, lines)
 	msgs := make(chan string, lineQueue)
 	go c.dispatch(lines, msgs)
 	go c.send(ctx, msgs)
@@ -97,12 +97,16 @@ func (c *CLI) cancelOnInterrupt(ctx context.Context) {
 
 // readLines blocks on in, which cannot be interrupted: after Close the
 // goroutine lives until the process exits or in ends.
-func readLines(in io.Reader, lines chan<- string) {
+func (c *CLI) readLines(in io.Reader, lines chan<- string) {
 	defer close(lines)
 	sc := bufio.NewScanner(in)
 	sc.Buffer(nil, maxLine)
 	for sc.Scan() {
 		lines <- sc.Text()
+	}
+	// A read error or a line over maxLine ends the input like EOF; say why.
+	if err := sc.Err(); err != nil {
+		c.h.Log().Error("input ended with an error", "err", err)
 	}
 }
 
