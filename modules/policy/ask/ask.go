@@ -39,7 +39,7 @@ func (p *Policy) authorize(ctx context.Context, m *aish.Mut[events.ToolCall]) er
 	p.waiting[call.Meta.ID] = call
 
 	err := p.h.Emit(ctx, events.UserQuestion{
-		ID: call.Meta.ID, Text: "Allow " + m.Event().Name + "?", Options: []string{"yes", "no"}, Ref: call.Meta.ID,
+		ID: call.Meta.ID, Text: fmt.Sprintf("Allow %s %s?", m.Event().Name, m.Event().Input), Options: []string{"yes", "no"}, Ref: call.Meta.ID,
 	})
 	switch {
 	case err == nil:
