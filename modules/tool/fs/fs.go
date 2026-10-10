@@ -41,23 +41,19 @@ type tool struct {
 	run      func(input json.RawMessage) (string, error)
 }
 
-// UnmarshalCaddyfile reads "tool <name> [root] { root <dir> }".
+// UnmarshalCaddyfile reads "tool <name> [root] [root <dir>]".
 func (t *tool) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	d.NextArg() // module name
-	switch args := d.RemainingArgs(); len(args) {
+	positional, err := aish.ReadOptions(d, map[string]aish.Option{"root": aish.StringOption(&t.Root)})
+	if err != nil {
+		return err //nolint:wrapcheck // carries the Agentfile position
+	}
+	switch len(positional) {
 	case 0:
 	case 1:
-		t.Root = args[0]
+		t.Root = positional[0]
 	default:
 		return d.ArgErr()
-	}
-	for d.NextBlock(0) {
-		if d.Val() != "root" {
-			return d.Errf("unknown option %q", d.Val())
-		}
-		if !d.Args(&t.Root) {
-			return d.ArgErr()
-		}
 	}
 
 	return nil

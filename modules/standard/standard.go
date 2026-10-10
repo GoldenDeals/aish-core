@@ -3,7 +3,6 @@ package standard
 
 import (
 	_ "github.com/GoldenDeals/aish-core/modules/agent/loop"
-	_ "github.com/GoldenDeals/aish-core/modules/config/agentfile"
 	_ "github.com/GoldenDeals/aish-core/modules/context/agents_md"
 	_ "github.com/GoldenDeals/aish-core/modules/context/append"
 	_ "github.com/GoldenDeals/aish-core/modules/context/skills"
@@ -15,6 +14,7 @@ import (
 	_ "github.com/GoldenDeals/aish-core/modules/policy/ask"
 	_ "github.com/GoldenDeals/aish-core/modules/policy/cedar"
 	_ "github.com/GoldenDeals/aish-core/modules/store/jsonl"
+	_ "github.com/GoldenDeals/aish-core/modules/subagents/communication"
 	_ "github.com/GoldenDeals/aish-core/modules/subagents/core"
 	_ "github.com/GoldenDeals/aish-core/modules/tool/bash"
 	_ "github.com/GoldenDeals/aish-core/modules/tool/fs"

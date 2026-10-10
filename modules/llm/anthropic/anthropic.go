@@ -39,35 +39,33 @@ type Anthropic struct {
 	client sdk.Client
 }
 
-// UnmarshalCaddyfile reads "llm anthropic { model <id>; api_key <key>;
-// max_tokens <n>; base_url <url> }".
+// UnmarshalCaddyfile reads "llm anthropic [model <id>] [api_key <key>]
+// [max_tokens <n>] [base_url <url>]"; the options can also stand in a block.
 func (a *Anthropic) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	d.NextArg() // module name
-	if len(d.RemainingArgs()) > 0 {
-		return d.ArgErr()
-	}
-	for d.NextBlock(0) {
-		var value string
-		opt := d.Val()
-		if !d.Args(&value) {
-			return d.ArgErr()
-		}
-		switch opt {
-		case "model":
-			a.Model = value
-		case "api_key":
-			a.APIKey = value
-		case "base_url":
-			a.BaseURL = value
-		case "max_tokens":
+	positional, err := aish.ReadOptions(d, map[string]aish.Option{
+		"model":    aish.StringOption(&a.Model),
+		"api_key":  aish.StringOption(&a.APIKey),
+		"base_url": aish.StringOption(&a.BaseURL),
+		"max_tokens": func(d *caddyfile.Dispenser) error {
+			var value string
+			if !d.Args(&value) {
+				return d.ArgErr()
+			}
 			n, err := strconv.Atoi(value)
 			if err != nil || n < 1 {
 				return d.Errf("max_tokens wants a positive number, got %q", value)
 			}
 			a.MaxTokens = n
-		default:
-			return d.Errf("unknown option %q", opt)
-		}
+
+			return nil
+		},
+	})
+	if err != nil {
+		return err //nolint:wrapcheck // carries the Agentfile position
+	}
+	if len(positional) > 0 {
+		return d.Errf("unknown option %q", positional[0])
 	}
 
 	return nil

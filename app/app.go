@@ -21,8 +21,7 @@ import (
 )
 
 const (
-	mainAgent     = "main"
-	defaultLoader = "config.agentfile"
+	mainAgent = aish.RootAgent
 	// termGrace is how long SIGTERM lets the agent finish its step.
 	termGrace = 30 * time.Second
 )
@@ -31,15 +30,11 @@ const (
 func Run() error {
 	configPath := flag.String("config", "Agentfile", "path to the Agentfile")
 	resume := flag.String("resume", "", "ID of the session to continue")
-	loaderID := flag.String("loader", defaultLoader, "config loader module")
 	flag.Parse()
 
 	if flag.Arg(0) == "list-modules" {
 		for _, m := range aish.Modules() {
 			fmt.Println(m.ID)
-		}
-		for _, id := range aish.ConfigLoaders() {
-			fmt.Println(id)
 		}
 
 		return nil
@@ -50,11 +45,7 @@ func Run() error {
 		return fmt.Errorf("aish: %w", err)
 	}
 	defer f.Close()
-	loader, ok := aish.LookupConfigLoader(*loaderID)
-	if !ok {
-		return fmt.Errorf("aish: config loader %q is not linked, have %v", *loaderID, aish.ConfigLoaders())
-	}
-	cfg, err := loader.Load(*configPath, f)
+	cfg, err := aish.LoadConfig(*configPath, f)
 	if err != nil {
 		return err //nolint:wrapcheck // config errors already carry the "aish: config:" prefix
 	}

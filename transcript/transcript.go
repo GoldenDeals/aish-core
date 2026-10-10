@@ -113,6 +113,9 @@ func (b *builder) tx(tx aish.Tx) {
 		case events.AgentReturn:
 			flush()
 			b.add(events.RoleUser, agentReturnBlock(ev))
+		case events.AgentMessage:
+			flush()
+			b.add(events.RoleUser, agentMessageBlock(ev))
 		case events.AssistantMessage:
 			flush()
 			b.add(events.RoleAssistant, placeCalls(ev.Blocks(), calls, placed)...)
@@ -167,6 +170,12 @@ func agentReturnBlock(r events.AgentReturn) events.Block {
 	}
 
 	return events.Block{Type: events.BlockText, Text: "<agent_return " + attrs + ">\n" + r.Text + "\n</agent_return>"}
+}
+
+func agentMessageBlock(m events.AgentMessage) events.Block {
+	attrs := fmt.Sprintf("from=%q agent=%q", m.From, m.Agent)
+
+	return events.Block{Type: events.BlockText, Text: "<agent_message " + attrs + ">\n" + m.Text + "\n</agent_message>"}
 }
 
 func resultBlock(c events.ToolCall, results map[string]events.ToolResult) events.Block {

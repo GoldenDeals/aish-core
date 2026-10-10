@@ -42,24 +42,23 @@ type AgentsMD struct {
 	Walk bool
 }
 
-// UnmarshalCaddyfile reads "context agents_md [pattern...] { pattern <glob>...; home; local; walk }".
+// UnmarshalCaddyfile reads "context agents_md [pattern...] [pattern <glob>...] [home] [local] [walk]".
 func (a *AgentsMD) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	d.NextArg() // module name
-	a.Patterns = d.RemainingArgs()
-	for d.NextBlock(0) {
-		switch d.Val() {
-		case "pattern":
+	positional, err := aish.ReadOptions(d, map[string]aish.Option{
+		"pattern": func(d *caddyfile.Dispenser) error {
 			a.Patterns = append(a.Patterns, d.RemainingArgs()...)
-		case "home":
-			a.Home = true
-		case "local":
-			a.Local = true
-		case "walk":
-			a.Walk = true
-		default:
-			return d.Errf("unknown option %q", d.Val())
-		}
+
+			return nil
+		},
+		"home":  aish.FlagOption(&a.Home),
+		"local": aish.FlagOption(&a.Local),
+		"walk":  aish.FlagOption(&a.Walk),
+	})
+	if err != nil {
+		return err //nolint:wrapcheck // carries the Agentfile position
 	}
+	a.Patterns = append(positional, a.Patterns...)
 
 	return nil
 }

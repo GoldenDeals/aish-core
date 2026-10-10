@@ -1,66 +1,48 @@
-{
-    log file .agents/logs/%D/%H-%s.log {
-        level info
-        # Reopen the path (with %H, %D... evaluated again) after this long.
-        rotate 24h
-    }
-    log trace .agents/traces/%D/%H-%s.trace {
-        rotate 1h
-    }
-}
-
-(files) {
-    tool fs_read
-    tool fs_edit {
-        root .
-    }
-}
-
-main {
-    description "Main agent"
-    max_steps 50
+(system) {
+    max_steps 50    
+    max_depth 2
     agent loop
 
-    log file .agents/logs/%D/%T-%s.log {
-        level debug
+    log {
+        file .agents/logs/%D/%T-%s.log level debug rotate 24h
+        trace .agents/traces/%D/%H-%s.trace rotate 1h
     }
-
-    context system_prompt
-    context agents_md AGENTS.md {
-        home
-        local
-        pattern CLAUDE.md
-        #walk
-    }
-    context skills ./.agents/skills ./examples/skills
-    import files
-    tool bash
-    subagents core
-
-    tool mcp exa {
-        url https://mcp.exa.ai/mcp?exaApiKey={$EXA_API_KEY}
-    }
-
-    frontend cli
 
     llm anthropic {
-        model claude-haiku-5-5
         api_key "{$ANTHROPIC_API_KEY}"
         max_tokens 64000
         base_url http://127.0.0.1:8317
     }
 
+    context {
+        system_prompt
+        agents_md AGENTS.md home local pattern CLAUDE.md
+        skills ./.agents/skills ./examples/skills
+    }
+
+    subagents core communication
+
     policy cedar ./examples/policies/allow-all.cedar
-    store jsonl .agents/sessions {
-        # New segment <session>.<unix time>.jsonl after this long; resume reads all.
-        rotate 24h
+    store jsonl .agents/sessions rotate 24h
+
+    frontend cli
+}
+
+{
+    import system
+    llm anthropic model claude-sonnet-5-5
+    description "Main general-purpuse agent"
+
+    tool {
+        fs_read
+        fs_edit root .
+        bash
+
+        mcp exa url https://mcp.exa.ai/mcp?exaApiKey={$EXA_API_KEY}
     }
 }
 
-# A subagent is a full agent of its own: nothing is inherited from main.
-# main calls it with the task tool; it is offered to every agent whose
-# block has "subagents core".
-reviewer {
+reviewer clean {
     description "Reads files and reports problems; never edits"
     max_depth 1
     agent loop
@@ -71,5 +53,6 @@ reviewer {
         base_url http://127.0.0.1:8317
     }
     tool fs_read
+    subagents communication
     policy cedar ./examples/policies/allow-all.cedar
 }

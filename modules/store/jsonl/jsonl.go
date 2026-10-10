@@ -59,25 +59,19 @@ type eventRecord struct {
 	Event json.RawMessage
 }
 
-// UnmarshalCaddyfile reads "store jsonl [dir] { rotate <duration> }".
+// UnmarshalCaddyfile reads "store jsonl [dir] [rotate <duration>]".
 func (s *Store) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	d.NextArg() // module name
-	switch args := d.RemainingArgs(); len(args) {
+	positional, err := aish.ReadOptions(d, map[string]aish.Option{"rotate": rotate.Option(&s.Rotate)})
+	if err != nil {
+		return err //nolint:wrapcheck // carries the Agentfile position
+	}
+	switch len(positional) {
 	case 0:
 	case 1:
-		s.Dir = args[0]
+		s.Dir = positional[0]
 	default:
 		return d.ArgErr()
-	}
-	for d.NextBlock(0) {
-		if d.Val() != "rotate" {
-			return d.Errf("unknown store jsonl option %q", d.Val())
-		}
-		p, err := rotate.Period(d)
-		if err != nil {
-			return err //nolint:wrapcheck // carries the Agentfile position
-		}
-		s.Rotate = p
 	}
 
 	return nil
@@ -321,3 +315,6 @@ func (s *Store) decode(rec record) (aish.Tx, error) {
 
 	return tx, nil
 }
+
+// NoInherit keeps Store out of merging blocks: a subagent session is not stored under the root's directory.
+func (*Store) NoInherit() {}

@@ -36,9 +36,43 @@ func init() {
 	aish.RegisterModule(aish.ModuleInfo{ID: "subagents.core", New: func() aish.Module { return &Subagent{} }})
 	aish.RegisterEvent[Started]()
 	aish.RegisterEvent[Finished]()
-	aish.RegisterDirective("description", unmarshalDescription)
-	aish.RegisterDirective("inject", unmarshalInject)
-	aish.RegisterDirective("max_depth", unmarshalMaxDepth)
+}
+
+// Subagent is the module subagents.core.
+type Subagent struct {
+	h     *aish.Host
+	limit int
+
+	ctx context.Context //nolint:containedctx // the Start context is how a goroutine emits outside hooks
+	wg  sync.WaitGroup
+}
+
+// ExtendConfig adds the agent options and the named blocks "<name> [merge|clean]"
+// that describe the agents task can call.
+func (*Subagent) ExtendConfig(c *aish.ConfigExt) {
+	c.Directive("description", unmarshalDescription)
+	c.Directive("inject", unmarshalInject)
+	c.Directive("max_depth", unmarshalMaxDepth)
+	c.Block(declareAgent)
+}
+
+// declareAgent reads the header "<name> [merge|clean]"; a block merges with
+// the root unless it says clean.
+func declareAgent(b *aish.Block) (bool, error) {
+	inherit := true
+	switch flags := b.Flags; {
+	case len(flags) == 0 || (len(flags) == 1 && flags[0] == "merge"):
+	case len(flags) == 1 && flags[0] == "clean":
+		inherit = false
+	default:
+		return false, fmt.Errorf("want \"%s [merge|clean] {\", got flags %v", b.Name, flags)
+	}
+
+	if err := b.Declare(inherit); err != nil {
+		return false, fmt.Errorf("declare: %w", err)
+	}
+
+	return true, nil
 }
 
 // Settings are the agent options of this module: how the agent presents
@@ -46,15 +80,16 @@ func init() {
 type Settings struct {
 	Description string
 	Hidden      bool // inject off: other agents are not told about this one
-	Depth       Depth
+	MaxDepth    int
+	DepthSet    bool // false: defaultMaxDepth
 }
 
-// Depth is a max_depth value: absolute, or relative to the global one when
-// written with a sign.
-type Depth struct {
-	Set      bool
-	Relative bool
-	N        int
+// Inherited drops what describes one agent: a block that merges with the root
+// is not the root.
+func (s Settings) Inherited() any {
+	s.Description, s.Hidden = "", false
+
+	return s
 }
 
 func update(v *aish.Values, change func(*Settings)) {
@@ -63,18 +98,15 @@ func update(v *aish.Values, change func(*Settings)) {
 	aish.Set(v, s)
 }
 
-func agentOnly(d *caddyfile.Dispenser, scope aish.Scope) error {
-	if scope != aish.ScopeAgent {
-		return d.Errf("%s belongs to an agent block", d.Val())
+func agentOnly(d *caddyfile.Dispenser, sec aish.Section) error {
+	if sec.Root {
+		return d.Errf("%s belongs to a named agent block", d.Val())
 	}
 
 	return nil
 }
 
-func unmarshalDescription(d *caddyfile.Dispenser, v *aish.Values, scope aish.Scope) error {
-	if err := agentOnly(d, scope); err != nil {
-		return err
-	}
+func unmarshalDescription(d *caddyfile.Dispenser, v *aish.Values, _ aish.Section) error {
 	var text string
 	if !d.Args(&text) || len(d.RemainingArgs()) > 0 {
 		return d.ArgErr()
@@ -84,8 +116,8 @@ func unmarshalDescription(d *caddyfile.Dispenser, v *aish.Values, scope aish.Sco
 	return nil
 }
 
-func unmarshalInject(d *caddyfile.Dispenser, v *aish.Values, scope aish.Scope) error {
-	if err := agentOnly(d, scope); err != nil {
+func unmarshalInject(d *caddyfile.Dispenser, v *aish.Values, sec aish.Section) error {
+	if err := agentOnly(d, sec); err != nil {
 		return err
 	}
 	var arg string
@@ -97,7 +129,7 @@ func unmarshalInject(d *caddyfile.Dispenser, v *aish.Values, scope aish.Scope) e
 	return nil
 }
 
-func unmarshalMaxDepth(d *caddyfile.Dispenser, v *aish.Values, scope aish.Scope) error {
+func unmarshalMaxDepth(d *caddyfile.Dispenser, v *aish.Values, _ aish.Section) error {
 	var arg string
 	if !d.Args(&arg) || len(d.RemainingArgs()) > 0 {
 		return d.ArgErr()
@@ -106,31 +138,24 @@ func unmarshalMaxDepth(d *caddyfile.Dispenser, v *aish.Values, scope aish.Scope)
 	if err != nil {
 		return d.Errf("max_depth wants a number, +n or -n, got %q", arg)
 	}
-	relative := arg[0] == '+' || arg[0] == '-'
-	if relative && scope == aish.ScopeGlobal {
-		return d.Errf("the global max_depth cannot be relative")
-	}
-	update(v, func(s *Settings) { s.Depth = Depth{Set: true, Relative: relative, N: n} })
+	update(v, func(s *Settings) {
+		if arg[0] == '+' || arg[0] == '-' {
+			n = max(s.depth()+n, 0)
+		}
+		s.MaxDepth, s.DepthSet = n, true
+	})
 
 	return nil
 }
 
-// limit is the depth at which a session of the agent stops offering task.
-func limit(spec aish.AgentSpec) int {
-	global, _ := aish.Get[Settings](spec.Global)
-	own, _ := aish.Get[Settings](spec.Own)
-	base := defaultMaxDepth
-	if global.Depth.Set {
-		base = global.Depth.N
+// depth is the nesting limit: where a session of the agent stops offering
+// task. A signed max_depth counts from the value the agent inherited.
+func (s Settings) depth() int {
+	if s.DepthSet {
+		return s.MaxDepth
 	}
-	switch {
-	case !own.Depth.Set:
-		return base
-	case own.Depth.Relative:
-		return max(base+own.Depth.N, 0)
-	default:
-		return own.Depth.N
-	}
+
+	return defaultMaxDepth
 }
 
 // Started and Finished let a frontend show the nesting.
@@ -150,15 +175,6 @@ type Finished struct {
 func (Started) Kind() string  { return "subagent.started" }
 func (Finished) Kind() string { return "subagent.finished" }
 
-// Subagent is the module subagents.core.
-type Subagent struct {
-	h     *aish.Host
-	limit int
-
-	ctx context.Context //nolint:containedctx // the Start context is how a goroutine emits outside hooks
-	wg  sync.WaitGroup
-}
-
 // agent is what the tool says about one callable agent.
 type agent struct {
 	name, description string
@@ -171,7 +187,8 @@ type input struct {
 
 func (s *Subagent) Init(_ context.Context, h *aish.Host) error {
 	s.h = h
-	s.limit = limit(h.Agent())
+	settings, _ := aish.Get[Settings](h.Agent().Values)
+	s.limit = settings.depth()
 
 	h.Mutate("advertise", func(_ context.Context, m *aish.Mut[events.LLMRequest]) error {
 		if spec, ok := s.spec(); ok {
@@ -227,7 +244,7 @@ func (s *Subagent) callable() []agent {
 	}
 	var agents []agent
 	for _, spec := range s.h.Agents() {
-		if own, _ := aish.Get[Settings](spec.Own); !own.Hidden {
+		if own, _ := aish.Get[Settings](spec.Values); !own.Hidden {
 			agents = append(agents, agent{name: spec.Name, description: own.Description})
 		}
 	}

@@ -30,19 +30,12 @@ type Log struct {
 	Rotate time.Duration
 }
 
-// UnmarshalCaddyfile reads "log file [path] { level <level>; rotate <duration> }".
+// UnmarshalCaddyfile reads "log file [path] [level <level>] [rotate <duration>]".
 func (l *Log) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	d.NextArg() // module name
-	switch args := d.RemainingArgs(); len(args) {
-	case 0:
-	case 1:
-		l.Path = args[0]
-	default:
-		return d.ArgErr()
-	}
-	for d.NextBlock(0) {
-		switch d.Val() {
-		case "level":
+	positional, err := aish.ReadOptions(d, map[string]aish.Option{
+		"rotate": rotate.Option(&l.Rotate),
+		"level": func(d *caddyfile.Dispenser) error {
 			var s string
 			if !d.Args(&s) {
 				return d.ArgErr()
@@ -50,15 +43,19 @@ func (l *Log) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			if err := l.Level.UnmarshalText([]byte(s)); err != nil {
 				return d.Errf("log level: %v", err)
 			}
-		case "rotate":
-			p, err := rotate.Period(d)
-			if err != nil {
-				return err //nolint:wrapcheck // carries the Agentfile position
-			}
-			l.Rotate = p
-		default:
-			return d.Errf("unknown log option %q", d.Val())
-		}
+
+			return nil
+		},
+	})
+	if err != nil {
+		return err //nolint:wrapcheck // carries the Agentfile position
+	}
+	switch len(positional) {
+	case 0:
+	case 1:
+		l.Path = positional[0]
+	default:
+		return d.ArgErr()
 	}
 
 	return nil
@@ -91,3 +88,6 @@ func (l *Log) Logger(session string) (*slog.Logger, io.Closer, error) {
 
 // Init does nothing: the logger exists before the session does.
 func (l *Log) Init(context.Context, *aish.Host) error { return nil }
+
+// NoInherit keeps Log out of merging blocks: the session log belongs to the root agent.
+func (*Log) NoInherit() {}

@@ -50,28 +50,27 @@ type MCP struct {
 	specs []events.ToolSpec
 }
 
-// UnmarshalCaddyfile reads "tool mcp <server> { command <argv>...; url <url> }".
+// UnmarshalCaddyfile reads "tool mcp <server> [command <argv>...] [url <url>]";
+// a command goes last on the line, since it takes all the arguments.
 func (m *MCP) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	d.NextArg() // module name
-	args := d.RemainingArgs()
-	if len(args) != 1 {
-		return d.ArgErr()
-	}
-	m.Server = args[0]
-	for d.NextBlock(0) {
-		switch d.Val() {
-		case "command":
+	positional, err := aish.ReadOptions(d, map[string]aish.Option{
+		"url": aish.StringOption(&m.URL),
+		"command": func(d *caddyfile.Dispenser) error {
 			if m.Command = d.RemainingArgs(); len(m.Command) == 0 {
 				return d.ArgErr()
 			}
-		case "url":
-			if !d.Args(&m.URL) {
-				return d.ArgErr()
-			}
-		default:
-			return d.Errf("unknown option %q", d.Val())
-		}
+
+			return nil
+		},
+	})
+	if err != nil {
+		return err //nolint:wrapcheck // carries the Agentfile position
 	}
+	if len(positional) != 1 {
+		return d.ArgErr()
+	}
+	m.Server = positional[0]
 
 	return nil
 }

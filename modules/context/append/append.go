@@ -39,22 +39,21 @@ type Part struct {
 	Path string
 }
 
-// UnmarshalCaddyfile reads "context append [file...] { text <text>; path <file>... }".
+// UnmarshalCaddyfile reads "context append [file...] [text <text>] [path <file>...]".
 // The parts keep the order they were written in.
 func (a *Append) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	d.NextArg() // module name
-	for _, path := range d.RemainingArgs() {
-		a.Parts = append(a.Parts, Part{Path: path})
-	}
-	for d.NextBlock(0) {
-		switch d.Val() {
-		case "text":
+	positional, err := aish.ReadOptions(d, map[string]aish.Option{
+		"text": func(d *caddyfile.Dispenser) error {
 			var text string
 			if !d.Args(&text) {
 				return d.ArgErr()
 			}
 			a.Parts = append(a.Parts, Part{Text: text})
-		case "path":
+
+			return nil
+		},
+		"path": func(d *caddyfile.Dispenser) error {
 			paths := d.RemainingArgs()
 			if len(paths) == 0 {
 				return d.ArgErr()
@@ -62,10 +61,18 @@ func (a *Append) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			for _, path := range paths {
 				a.Parts = append(a.Parts, Part{Path: path})
 			}
-		default:
-			return d.Errf("unknown option %q", d.Val())
-		}
+
+			return nil
+		},
+	})
+	if err != nil {
+		return err //nolint:wrapcheck // carries the Agentfile position
 	}
+	files := make([]Part, 0, len(positional)+len(a.Parts))
+	for _, path := range positional {
+		files = append(files, Part{Path: path})
+	}
+	a.Parts = append(files, a.Parts...)
 
 	return nil
 }

@@ -31,6 +31,14 @@ type AgentReturn struct {
 	IsError bool
 }
 
+// AgentMessage is a message another running agent sent with a tool. The agent
+// loop answers it like a user.message.
+type AgentMessage struct {
+	From  string // ID of the sender's session
+	Agent string // agent block of the sender
+	Text  string
+}
+
 // UserQuestion asks a human. ID is chosen by the asker and comes back in
 // UserAnswer.QuestionID; an Emit that returns ErrUnhandled means nobody can
 // answer.
@@ -394,6 +402,7 @@ type LoopStopped struct {
 func (LoopStopped) Kind() string      { return "loop.stopped" }
 func (UserMessage) Kind() string      { return "user.message" }
 func (AgentReturn) Kind() string      { return "agent.return" }
+func (AgentMessage) Kind() string     { return "agent.message" }
 func (UserQuestion) Kind() string     { return "user.question" }
 func (UserAnswer) Kind() string       { return "user.answer" }
 func (LLMRequest) Kind() string       { return "llm.request" }
@@ -405,6 +414,7 @@ func (Compacted) Kind() string        { return "compacted" }
 func init() {
 	aish.RegisterEvent[UserMessage]()
 	aish.RegisterEvent[AgentReturn]()
+	aish.RegisterEvent[AgentMessage]()
 	aish.RegisterEvent[UserQuestion]()
 	aish.RegisterEvent[UserAnswer]()
 	aish.RegisterEvent[LLMRequest]()

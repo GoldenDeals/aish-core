@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
+
+	aish "github.com/GoldenDeals/aish-core"
 )
 
 const (
@@ -126,4 +128,17 @@ func Period(d *caddyfile.Dispenser) (time.Duration, error) {
 	}
 
 	return p, nil
+}
+
+// Option is the module option "rotate <duration>", stored in dst.
+func Option(dst *time.Duration) aish.Option {
+	return func(d *caddyfile.Dispenser) error {
+		p, err := Period(d)
+		if err != nil {
+			return err
+		}
+		*dst = p
+
+		return nil
+	}
 }

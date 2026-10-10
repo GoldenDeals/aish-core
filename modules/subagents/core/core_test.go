@@ -18,7 +18,7 @@ import (
 func specs(maxDepth int) []aish.AgentSpec {
 	mk := func(name, desc string, hidden bool) aish.AgentSpec {
 		a := aish.AgentSpec{Name: name}
-		aish.Set(&a.Own, core.Settings{Description: desc, Hidden: hidden, Depth: core.Depth{Set: true, N: maxDepth}})
+		aish.Set(&a.Values, core.Settings{Description: desc, Hidden: hidden, MaxDepth: maxDepth, DepthSet: true})
 
 		return a
 	}

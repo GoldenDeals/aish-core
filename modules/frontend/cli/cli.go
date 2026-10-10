@@ -60,6 +60,7 @@ func (c *CLI) Init(_ context.Context, h *aish.Host) error {
 	h.Handle("show-call", c.showCall, aish.Priority(0))
 	h.Handle("show-stopped", c.showStopped)
 	h.Handle("show-agent-return", c.showAgentReturn)
+	h.Handle("show-agent-message", c.showAgentMessage)
 	h.Observe("show-error", c.showError)
 	h.Observe("busy-start", func(context.Context, aish.TxStarted) { c.busy.Store(true) })
 	h.Observe("busy-end", func(context.Context, aish.TxCommitted) { c.busy.Store(false) })
@@ -216,6 +217,12 @@ func (c *CLI) showAgentReturn(_ context.Context, e events.AgentReturn) error {
 	return nil
 }
 
+func (c *CLI) showAgentMessage(_ context.Context, e events.AgentMessage) error {
+	c.printf("[agent %s] message\n", e.Agent)
+
+	return nil
+}
+
 func (c *CLI) showStopped(_ context.Context, e events.LoopStopped) error {
 	c.printf("[stopped] %s\n", e.Reason)
 
@@ -314,3 +321,6 @@ func (c *CLI) printf(format string, args ...any) {
 		c.h.Log().Error("cannot write output", "err", err)
 	}
 }
+
+// NoInherit keeps CLI out of merging blocks: the user talks to the main agent only.
+func (*CLI) NoInherit() {}

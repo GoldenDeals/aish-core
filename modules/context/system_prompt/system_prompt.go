@@ -40,29 +40,22 @@ type SystemPrompt struct {
 	Path string
 }
 
-// UnmarshalCaddyfile reads "context system_prompt [path] { text <text>; path <file> }".
+// UnmarshalCaddyfile reads "context system_prompt [path] [text <text>] [path <file>]".
 func (s *SystemPrompt) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	d.NextArg() // module name
-	switch args := d.RemainingArgs(); len(args) {
+	positional, err := aish.ReadOptions(d, map[string]aish.Option{
+		"text": aish.StringOption(&s.Text),
+		"path": aish.StringOption(&s.Path),
+	})
+	if err != nil {
+		return err //nolint:wrapcheck // carries the Agentfile position
+	}
+	switch len(positional) {
 	case 0:
 	case 1:
-		s.Path = args[0]
+		s.Path = positional[0]
 	default:
 		return d.ArgErr()
-	}
-	for d.NextBlock(0) {
-		var dst *string
-		switch d.Val() {
-		case "text":
-			dst = &s.Text
-		case "path":
-			dst = &s.Path
-		default:
-			return d.Errf("unknown option %q", d.Val())
-		}
-		if !d.Args(dst) {
-			return d.ArgErr()
-		}
 	}
 
 	return nil

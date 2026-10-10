@@ -51,7 +51,7 @@ CI (`.github/workflows/ci.yml`) сначала запускает линт, по
 
 - `aish` (корень) — ядро; `events` — общие типы событий; `transcript` — хелпер; `test` — тестовые хелперы (`NewSession`, `NewSessionWith`, `Frontend`, `FakeLLM`).
 - `modules/<namespace>/<name>` — модули (`agent/loop`, `frontend/cli`, `policy/ask`, `store/jsonl`, `tool/fs`); `modules/standard` линкует стандартную сборку. Новый модуль регистрируется в `init()` и добавляется в `modules/standard`.
-- `modules/config/agentfile` — загрузчик Agentfile (`config.agentfile`), подключаемый как `aish.ConfigLoader`; настройки агента объявляют сами модули через `aish.RegisterDirective`, а не загрузчик; `app` — запуск сессии (флаги, логи, сигналы); `cmd/aish` — точка входа со стандартной сборкой; `cmd/aish-build` — сборка бинаря с другим набором модулей. Список стандартных модулей — только импорты в `modules/standard`: `aish-build` читает его оттуда. Модуль читает свою директиву в `UnmarshalCaddyfile` (`Dispenser` стоит на первом токене директивы, имя модуля пропускай `d.NextArg()`), аргументы разбирай через `RemainingArgs` (`NextArg` возвращает и `{`).
+- Конфиг — часть ядра (`config.go`, `aish.LoadConfig`); расширяют его модули через `aish.ConfigExtender` (директивы и именованные блоки), поэтому директива или блок работают, только если модуль есть в конфиге; `app` — запуск сессии (флаги, логи, сигналы); `cmd/aish` — точка входа со стандартной сборкой; `cmd/aish-build` — сборка бинаря с другим набором модулей. Список стандартных модулей — только импорты в `modules/standard`: `aish-build` читает его оттуда. Модуль читает свою директиву в `UnmarshalCaddyfile` (`Dispenser` стоит на первом токене директивы, имя модуля пропускай `d.NextArg()`), аргументы разбирай через `RemainingArgs` (`NextArg` возвращает и `{`).
 
 ### События и хуки
 
@@ -78,5 +78,5 @@ CI (`.github/workflows/ci.yml`) сначала запускает линт, по
 - `LLMRequest.Messages` и `Tx.Trace` в журнал и на диск не пишутся (`json:"-"`).
 
 - Модули пишут логи только через `h.Log()` (`slog`), а не в stdout/stderr: терминал принадлежит фронтенду.
-- Конфиг (`Agentfile`) пишется в синтаксисе Caddyfile и разбирается `github.com/caddyserver/caddy/v2/caddyconfig/caddyfile`. Безымянный блок `{ ... }` в начале файла — глобальные директивы для всех агентов, блок `main` их переопределяет. Пример лежит в `examples/Agentfile`. §7 ещё будет пересмотрен.
+- Конфиг (`Agentfile`) пишется в синтаксисе Caddyfile и разбирается `github.com/caddyserver/caddy/v2/caddyconfig/caddyfile`. Первый блок `{ ... }` — корень (агент `main`); именованные блоки `name [merge|clean] { ... }` принимает модуль, добавивший вид блока (сабагенты — `subagents core`). Пример лежит в `examples/Agentfile`, правила — в §7.
 - Инварианты, которые должны покрывать тесты ядра, перечислены в §10.

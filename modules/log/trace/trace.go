@@ -35,25 +35,19 @@ type Trace struct {
 	file io.Closer
 }
 
-// UnmarshalCaddyfile reads "log trace [path] { rotate <duration> }".
+// UnmarshalCaddyfile reads "log trace [path] [rotate <duration>]".
 func (t *Trace) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	d.NextArg() // module name
-	switch args := d.RemainingArgs(); len(args) {
+	positional, err := aish.ReadOptions(d, map[string]aish.Option{"rotate": rotate.Option(&t.Rotate)})
+	if err != nil {
+		return err //nolint:wrapcheck // carries the Agentfile position
+	}
+	switch len(positional) {
 	case 0:
 	case 1:
-		t.Path = args[0]
+		t.Path = positional[0]
 	default:
 		return d.ArgErr()
-	}
-	for d.NextBlock(0) {
-		if d.Val() != "rotate" {
-			return d.Errf("unknown log trace option %q", d.Val())
-		}
-		p, err := rotate.Period(d)
-		if err != nil {
-			return err //nolint:wrapcheck // carries the Agentfile position
-		}
-		t.Rotate = p
 	}
 
 	return nil
