@@ -8,6 +8,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/GoldenDeals/aish-core/internal/deepcopy"
 )
 
 var (
@@ -153,7 +155,7 @@ func (tx *txState) deliver(ev Event, opts EmitOpts, sender *hook, source string,
 			if tx.ctx.Err() != nil {
 				break
 			}
-			c := cloneEvent(rec.env.Event)
+			c := deepcopy.Copy(rec.env.Event)
 			ok, err := tx.admit(hk, rec, c, opts, sender, depth)
 			errs = append(errs, err)
 			if !ok {
@@ -205,7 +207,7 @@ func (tx *txState) admit(hk *hook, rec *record, ev Event, opts EmitOpts, sender 
 }
 
 func (tx *txState) runMutate(hk *hook, rec *record, depth int) error {
-	before := cloneEvent(rec.env.Event)
+	before := deepcopy.Copy(rec.env.Event)
 	var removed bool
 	dur, err := tx.invoke(hk, rec.env.Meta, depth, func(ctx context.Context) error {
 		out, rm, err := hk.mutate(ctx, rec.env.Event, rec.env.Meta)

@@ -124,8 +124,9 @@ type hook struct {
 
 func (hk *hook) Remove() { hk.removed.Store(true) }
 
-func hookOrder(a, b *hook) int {
-	return cmp.Or(cmp.Compare(b.info.Priority, a.info.Priority), strings.Compare(a.info.ID, b.info.ID))
+// compare orders hooks for delivery: descending priority, then hook ID.
+func (hk *hook) compare(other *hook) int {
+	return cmp.Or(cmp.Compare(other.info.Priority, hk.info.Priority), strings.Compare(hk.info.ID, other.info.ID))
 }
 
 // hookRegistry holds the subscriptions of one session.
@@ -190,7 +191,7 @@ func (r *hookRegistry) snapshot(kind string, mode Mode) []*hook {
 			}
 		}
 	}
-	slices.SortFunc(out, hookOrder)
+	slices.SortFunc(out, (*hook).compare)
 
 	return out
 }
@@ -212,7 +213,7 @@ func (r *hookRegistry) infos(kind string, all bool) []HookInfo {
 
 	hooks = slices.DeleteFunc(hooks, func(hk *hook) bool { return hk.removed.Load() })
 	slices.SortFunc(hooks, func(a, b *hook) int {
-		return cmp.Or(strings.Compare(a.info.Kind, b.info.Kind), cmp.Compare(a.info.Mode, b.info.Mode), hookOrder(a, b))
+		return cmp.Or(strings.Compare(a.info.Kind, b.info.Kind), cmp.Compare(a.info.Mode, b.info.Mode), a.compare(b))
 	})
 
 	out := make([]HookInfo, len(hooks))
@@ -270,7 +271,7 @@ func allowedModes(ev Event) Mode {
 
 // subscribe builds and registers a hook of type E. bind fills in the
 // mode-specific function.
-func subscribe[E Event](h *Host, mode Mode, name string, opts []HookOpt, bind func(hk *hook)) Sub {
+func (h *Host) subscribe[E Event](mode Mode, name string, opts []HookOpt, bind func(hk *hook)) Sub {
 	if name == "" || strings.ContainsAny(name, ": \t\n") {
 		panic(fmt.Sprintf("aish: invalid hook name %q", name))
 	}

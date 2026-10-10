@@ -1,18 +1,21 @@
-package aish
+// Package deepcopy copies values through reflection. The core uses it to
+// give every Handle and Observe hook its own copy of an event.
+package deepcopy
 
 import "reflect"
 
-// cloneEvent returns a deep copy of ev for a Handle or Observe hook.
+// Copy returns a deep copy of v.
 //
 // Exported fields are copied recursively: structs, pointers, slices, maps,
 // arrays and interfaces. Unexported fields are copied shallowly, so private
 // state (such as a Stream buffer) stays shared; a type that needs something
 // else implements Clone() returning its own type. Pointer cycles are kept.
-func cloneEvent(ev Event) Event {
-	if ev == nil {
-		return nil
+func Copy[T any](v T) T {
+	rv := reflect.ValueOf(v)
+	if !rv.IsValid() { // nil interface
+		return v
 	}
-	out, _ := cloneValue(reflect.ValueOf(ev), map[uintptr]reflect.Value{}).Interface().(Event)
+	out, _ := cloneValue(rv, map[uintptr]reflect.Value{}).Interface().(T)
 
 	return out
 }

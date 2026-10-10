@@ -8,6 +8,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/GoldenDeals/aish-core/internal/deepcopy"
 )
 
 const (
@@ -294,7 +296,7 @@ func (s *session) observe(ev Event, meta Meta) {
 	for _, hk := range s.hooks.snapshot(ev.Kind(), ModeObserve) {
 		ctx := context.WithValue(s.ctx, ctxKey{}, &ctxInfo{sess: s, hook: hk, observe: true, meta: meta})
 		err := safeCall(func() error {
-			c := cloneEvent(ev)
+			c := deepcopy.Copy(ev)
 			if hk.where == nil || hk.where(c) {
 				hk.observe(ctx, c)
 			}

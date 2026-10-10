@@ -1,4 +1,4 @@
-package aish
+package deepcopy
 
 import (
 	"encoding/json"
@@ -20,8 +20,6 @@ type cloneProbe struct {
 	private []int
 }
 
-func (cloneProbe) Kind() string { return "test.clone" }
-
 type custom struct{ Calls *int }
 
 func (c custom) Clone() custom {
@@ -30,7 +28,18 @@ func (c custom) Clone() custom {
 	return c
 }
 
-func TestCloneEventIsDeep(t *testing.T) {
+func TestCopyNil(t *testing.T) {
+	t.Parallel()
+
+	if got := Copy[any](nil); got != nil {
+		t.Errorf("Copy(nil interface) = %v, want nil", got)
+	}
+	if got := Copy[*node](nil); got != nil {
+		t.Errorf("Copy(nil pointer) = %v, want nil", got)
+	}
+}
+
+func TestCopyIsDeep(t *testing.T) {
 	t.Parallel()
 
 	cycle := &node{Name: "a"}
@@ -46,9 +55,12 @@ func TestCloneEventIsDeep(t *testing.T) {
 		private: []int{7},
 	}
 
-	c, ok := cloneEvent(orig).(cloneProbe)
+	// The core copies events through the Event interface, so copy through an
+	// interface type too: the dynamic type must survive.
+	var boxed any = orig
+	c, ok := Copy(boxed).(cloneProbe)
 	if !ok {
-		t.Fatalf("clone has type %T", cloneEvent(orig))
+		t.Fatalf("copy has type %T", Copy(boxed))
 	}
 	c.Map["k"][0] = 2
 	c.Ptr.Name = "b"

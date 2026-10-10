@@ -35,7 +35,7 @@ func (h *Host) Cancel() {
 // Mutate subscribes a hook that may change or remove events of type E
 // before Handle hooks see them.
 func (h *Host) Mutate[E Event](name string, fn func(context.Context, *Mut[E]) error, opts ...HookOpt) Sub {
-	return subscribe[E](h, ModeMutate, name, opts, func(hk *hook) {
+	return h.subscribe[E](ModeMutate, name, opts, func(hk *hook) {
 		hk.mutate = func(ctx context.Context, ev Event, meta Meta) (Event, bool, error) {
 			e := as[E](ev)
 			m := &Mut[E]{ev: &e, meta: meta}
@@ -49,7 +49,7 @@ func (h *Host) Mutate[E Event](name string, fn func(context.Context, *Mut[E]) er
 // Handle subscribes a hook that gets a deep copy of the final event of type E
 // and may emit new events.
 func (h *Host) Handle[E Event](name string, fn func(context.Context, E) error, opts ...HookOpt) Sub {
-	return subscribe[E](h, ModeHandle, name, opts, func(hk *hook) {
+	return h.subscribe[E](ModeHandle, name, opts, func(hk *hook) {
 		hk.handle = func(ctx context.Context, ev Event) error { return fn(ctx, as[E](ev)) }
 	})
 }
@@ -58,7 +58,7 @@ func (h *Host) Handle[E Event](name string, fn func(context.Context, E) error, o
 // type E. With E = Event it gets events of all kinds. Emit from an Observe
 // hook queues a new transaction and returns without waiting for it.
 func (h *Host) Observe[E Event](name string, fn func(context.Context, E), opts ...HookOpt) Sub {
-	return subscribe[E](h, ModeObserve, name, opts, func(hk *hook) {
+	return h.subscribe[E](ModeObserve, name, opts, func(hk *hook) {
 		hk.observe = func(ctx context.Context, ev Event) { fn(ctx, as[E](ev)) }
 	})
 }

@@ -50,7 +50,7 @@ func newTestSession(t *testing.T) (*session, context.Context) {
 	return s, ctx
 }
 
-func lastTx(t *testing.T, s *session) Tx {
+func (s *session) lastTx(t *testing.T) Tx {
 	t.Helper()
 	tx, ok := s.journal.Last()
 	if !ok {
@@ -60,7 +60,7 @@ func lastTx(t *testing.T, s *session) Tx {
 	return tx
 }
 
-func kinds(tx Tx) []string {
+func (tx Tx) kinds() []string {
 	out := make([]string, len(tx.Events))
 	for i, env := range tx.Events {
 		out[i] = env.Event.Kind()
@@ -106,7 +106,7 @@ func TestDeliveryOrder(t *testing.T) {
 	if !slices.Equal(order, want) {
 		t.Errorf("order = %v, want %v", order, want)
 	}
-	tx := lastTx(t, s)
+	tx := s.lastTx(t)
 	if got := tx.Events[0].Event.(call).Name; got != "changed" {
 		t.Errorf("journaled Name = %q, want the mutated value", got)
 	}
@@ -138,9 +138,9 @@ func TestRemoveStopsDelivery(t *testing.T) {
 	if handled {
 		t.Error("Handle hook got a removed event")
 	}
-	tx := lastTx(t, s)
+	tx := s.lastTx(t)
 	if len(tx.Events) != 0 {
-		t.Errorf("events = %v, want none", kinds(tx))
+		t.Errorf("events = %v, want none", tx.kinds())
 	}
 	if tx.Trace[1].Action != TraceRemove {
 		t.Errorf("trace = %+v, want remove", tx.Trace)
@@ -209,7 +209,7 @@ func TestBelowContinuesTheChain(t *testing.T) {
 					t.Errorf("%s got the call %d times, want %d", name, got[name], want)
 				}
 			}
-			tx := lastTx(t, s)
+			tx := s.lastTx(t)
 			if len(tx.Events) != 1 || tx.Events[0].Meta.ID != "1.1" {
 				t.Errorf("events = %+v, want the re-emitted call journaled under its original ID 1.1", tx.Events)
 			}
@@ -262,7 +262,7 @@ func TestUnhandledIgnoresObserveHooks(t *testing.T) {
 	if !errors.Is(err, ErrUnhandled) {
 		t.Fatalf("Emit = %v, want ErrUnhandled", err)
 	}
-	if got := kinds(lastTx(t, s)); !slices.Equal(got, []string{"test.note"}) {
+	if got := s.lastTx(t).kinds(); !slices.Equal(got, []string{"test.note"}) {
 		t.Errorf("events = %v; an unhandled event is still journaled", got)
 	}
 	want := []string{"all:tx.started", "all:test.note", "typed", "all:tx.committed"}
@@ -288,7 +288,7 @@ func TestDuplicateDeliveryIsBlocked(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tx := lastTx(t, s)
+	tx := s.lastTx(t)
 	var dups int
 	for _, e := range tx.Trace {
 		if e.Action == TraceDuplicate {
@@ -298,8 +298,8 @@ func TestDuplicateDeliveryIsBlocked(t *testing.T) {
 	if dups == 0 || tx.Status != StatusCommitted {
 		t.Errorf("status %s, %d duplicate entries; want a committed tx with blocked duplicates", tx.Status, dups)
 	}
-	if !slices.Contains(kinds(tx), "module.error") {
-		t.Errorf("events = %v, want module.error for the duplicate", kinds(tx))
+	if !slices.Contains(tx.kinds(), "module.error") {
+		t.Errorf("events = %v, want module.error for the duplicate", tx.kinds())
 	}
 }
 
@@ -318,7 +318,7 @@ func TestDepthLimitCancelsTransaction(t *testing.T) {
 	if !errors.Is(err, ErrLimit) {
 		t.Fatalf("Emit = %v, want ErrLimit", err)
 	}
-	if tx := lastTx(t, s); tx.Status != StatusCancelled {
+	if tx := s.lastTx(t); tx.Status != StatusCancelled {
 		t.Errorf("status = %s, want cancelled", tx.Status)
 	}
 }
@@ -345,7 +345,7 @@ func TestEventLimitCancelsTransaction(t *testing.T) {
 	if err := h.Emit(ctx, note{}); !errors.Is(err, ErrLimit) {
 		t.Fatalf("Emit = %v, want ErrLimit", err)
 	}
-	if tx := lastTx(t, s); tx.Status != StatusCancelled {
+	if tx := s.lastTx(t); tx.Status != StatusCancelled {
 		t.Errorf("status = %s, want cancelled", tx.Status)
 	}
 }
@@ -378,11 +378,11 @@ func TestCancelledTransactionKeepsWhatHappened(t *testing.T) {
 	if laterRan {
 		t.Error("a hook ran after the transaction was cancelled")
 	}
-	tx := lastTx(t, s)
+	tx := s.lastTx(t)
 	if tx.Status != StatusCancelled {
 		t.Errorf("status = %s, want cancelled", tx.Status)
 	}
-	if got := kinds(tx); !slices.Equal(got[:2], []string{"test.call", "test.result"}) {
+	if got := tx.kinds(); !slices.Equal(got[:2], []string{"test.call", "test.result"}) {
 		t.Errorf("events = %v, want the call and the result written before cancellation", got)
 	}
 }
@@ -550,7 +550,7 @@ func TestDeadlockWarning(t *testing.T) {
 		t.Errorf("inner Emit = %v, want it to wait until its ctx expires", inner)
 	}
 	var warned bool
-	for _, e := range lastTx(t, s).Trace {
+	for _, e := range s.lastTx(t).Trace {
 		if e.Action == TraceWarn && e.Hook == "m:h" {
 			warned = true
 		}
@@ -639,8 +639,8 @@ func TestUnreturnedErrorsAreRecorded(t *testing.T) {
 	}
 	<-second
 
-	tx := lastTx(t, s)
-	if got := kinds(tx); !slices.Equal(got, []string{"test.result", "module.error"}) {
+	tx := s.lastTx(t)
+	if got := tx.kinds(); !slices.Equal(got, []string{"test.result", "module.error"}) {
 		t.Fatalf("events = %v, want the result and a module.error", got)
 	}
 	if me := tx.Events[1].Event.(ModuleError); !strings.Contains(me.Error, "no mutate or handle hook") {
@@ -670,7 +670,7 @@ func TestHooksGetDeepCopies(t *testing.T) {
 	if seen.Args["path"] != "a.txt" || seen.Tags[0] != "read" {
 		t.Errorf("second Handle hook saw %+v; changes of another hook leaked", seen)
 	}
-	if c := lastTx(t, s).Events[0].Event.(call); c.Args["path"] != "a.txt" || c.Tags[0] != "read" {
+	if c := s.lastTx(t).Events[0].Event.(call); c.Args["path"] != "a.txt" || c.Tags[0] != "read" {
 		t.Errorf("journal has %+v; changes of Handle or Observe hooks leaked", c)
 	}
 }
@@ -844,7 +844,7 @@ func TestPolicyAsksAndReemits(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			tx := lastTx(t, s)
+			tx := s.lastTx(t)
 			var res result
 			for _, env := range tx.Events {
 				if r, ok := env.Event.(result); ok {
@@ -852,7 +852,7 @@ func TestPolicyAsksAndReemits(t *testing.T) {
 				}
 			}
 			if res.Text != tc.want || res.CallID != "1.1" {
-				t.Errorf("result = %+v, want %q for call 1.1; events %v", res, tc.want, kinds(tx))
+				t.Errorf("result = %+v, want %q for call 1.1; events %v", res, tc.want, tx.kinds())
 			}
 			if toolRan != tc.frontend {
 				t.Errorf("tool ran = %v, want %v", toolRan, tc.frontend)
