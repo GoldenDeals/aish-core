@@ -34,12 +34,23 @@ type Session struct {
 func NewSession(t testing.TB, instances ...aish.Instance) *Session {
 	t.Helper()
 
+	return NewSessionWith(t, aish.SessionConfig{Instances: instances})
+}
+
+// NewSessionWith is NewSession for a session that needs its own ID or
+// Options, for example a resumed one. Agent and Log default as in NewSession.
+func NewSessionWith(t testing.TB, cfg aish.SessionConfig) *Session {
+	t.Helper()
+
 	d := &driver{}
-	s, err := aish.NewSession(aish.SessionConfig{
-		Agent:     "main",
-		Instances: slices.Concat(instances, []aish.Instance{{Name: DriverInstance, Module: d}}),
-		Log:       slog.New(slog.NewTextHandler(t.Output(), &slog.HandlerOptions{Level: slog.LevelDebug})),
-	})
+	if cfg.Agent == "" {
+		cfg.Agent = "main"
+	}
+	if cfg.Log == nil {
+		cfg.Log = slog.New(slog.NewTextHandler(t.Output(), &slog.HandlerOptions{Level: slog.LevelDebug}))
+	}
+	cfg.Instances = slices.Concat(cfg.Instances, []aish.Instance{{Name: DriverInstance, Module: d}})
+	s, err := aish.NewSession(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

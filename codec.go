@@ -15,6 +15,11 @@ type Options struct {
 	Trace    bool
 }
 
+func init() {
+	RegisterEvent[SessionStarted]()
+	RegisterEvent[ModuleError]()
+}
+
 var decoders = struct {
 	sync.RWMutex
 	byKind map[string]eventDecoder
