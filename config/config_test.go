@@ -91,7 +91,7 @@ func TestExampleLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Options.MaxSteps != 50 || len(cfg.Instances) != 7 {
+	if cfg.Options.MaxSteps != 50 || len(cfg.Instances) != 8 {
 		t.Fatalf("options %+v, %d instances", cfg.Options, len(cfg.Instances))
 	}
 }

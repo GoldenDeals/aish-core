@@ -21,6 +21,10 @@ main {
     max_steps 50
 
     agent loop
+
+    # Системный промпт: без аргументов встроенный; иначе «context system_prompt файл.md»
+    # или блок { text "..." }.
+    context system_prompt
     frontend cli
 
     # Ключ можно не указывать: SDK читает ANTHROPIC_API_KEY или профиль `ant auth login`.

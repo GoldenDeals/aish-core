@@ -3,6 +3,7 @@ package standard
 
 import (
 	_ "github.com/GoldenDeals/aish-core/modules/agent/loop"
+	_ "github.com/GoldenDeals/aish-core/modules/context/system_prompt"
 	_ "github.com/GoldenDeals/aish-core/modules/frontend/cli"
 	_ "github.com/GoldenDeals/aish-core/modules/llm/anthropic"
 	_ "github.com/GoldenDeals/aish-core/modules/policy/ask"
