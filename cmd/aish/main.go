@@ -1,160 +1,17 @@
-// Command aish runs an agent session described by a Caddyfile.
+// Command aish runs an agent session with the modules of the standard build.
 package main
 
 import (
-	"cmp"
-	"context"
-	"crypto/rand"
-	"errors"
-	"flag"
 	"fmt"
-	"log/slog"
 	"os"
-	"os/signal"
-	"path/filepath"
-	"syscall"
 
-	aish "github.com/GoldenDeals/aish-core"
-	"github.com/GoldenDeals/aish-core/config"
+	"github.com/GoldenDeals/aish-core/app"
 	_ "github.com/GoldenDeals/aish-core/modules/standard"
-	"github.com/GoldenDeals/aish-core/trace"
-)
-
-const (
-	logDirMode  = 0o755
-	logFileMode = 0o600
 )
 
 func main() {
-	if err := run(); err != nil {
+	if err := app.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-}
-
-func run() error {
-	configPath := flag.String("config", "Caddyfile", "path to the Caddyfile")
-	resume := flag.String("resume", "", "ID of the session to continue")
-	tracePath := flag.String("trace", "", "append the trace of every transaction to this file as it commits")
-	flag.Parse()
-
-	if flag.Arg(0) == "list-modules" {
-		for _, m := range aish.Modules() {
-			fmt.Println(m.ID)
-		}
-
-		return nil
-	}
-
-	f, err := os.Open(*configPath)
-	if err != nil {
-		return fmt.Errorf("aish: %w", err)
-	}
-	defer f.Close()
-	cfg, err := config.Load(*configPath, f)
-	if err != nil {
-		return err //nolint:wrapcheck // config errors already carry the "aish: config:" prefix
-	}
-	cfg.Options.Resume, cfg.Options.Trace = *resume, *tracePath != ""
-	if *tracePath != "" {
-		cfg.Instances = append(cfg.Instances, aish.Instance{Name: "trace.file", Module: &traceFile{path: *tracePath}})
-	}
-
-	// A resumed session keeps its ID so the store continues the same file.
-	id := cmp.Or(*resume, rand.Text())
-	if id != filepath.Base(id) {
-		return fmt.Errorf("aish: invalid session ID %q", id)
-	}
-	logFile, err := openLog(id)
-	if err != nil {
-		return err
-	}
-	defer logFile.Close()
-
-	s, err := aish.NewSession(aish.SessionConfig{
-		ID:        id,
-		Agent:     "main",
-		Instances: cfg.Instances,
-		Options:   cfg.Options,
-		Log:       slog.New(slog.NewTextHandler(logFile, nil)),
-	})
-	if err != nil {
-		return fmt.Errorf("aish: %w", err)
-	}
-
-	return serve(s, cfg.Instances)
-}
-
-// openLog opens ~/.aish/logs/<session>.log: the terminal belongs to the
-// frontend, so logs never go to stdout or stderr.
-func openLog(id string) (*os.File, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("aish: %w", err)
-	}
-	dir := filepath.Join(home, ".aish", "logs")
-	if err := os.MkdirAll(dir, logDirMode); err != nil {
-		return nil, fmt.Errorf("aish: %w", err)
-	}
-	f, err := os.OpenFile(filepath.Join(dir, id+".log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, logFileMode) //nolint:gosec // id is checked to be a plain file name in run
-	if err != nil {
-		return nil, fmt.Errorf("aish: %w", err)
-	}
-
-	return f, nil
-}
-
-// serve runs the session until the frontend's input ends or SIGTERM, then
-// lets the agent finish what it is doing. Ctrl+C belongs to the frontend.
-func serve(s *aish.Session, instances []aish.Instance) error {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
-	defer stop()
-
-	if err := s.Start(); err != nil {
-		return fmt.Errorf("aish: %w", err)
-	}
-	done := ctx.Done()
-	for _, inst := range instances {
-		if f, ok := inst.Module.(interface{ Done() <-chan struct{} }); ok {
-			done = f.Done()
-		}
-	}
-	<-done
-
-	// Close cancels whatever is still open, so wait for the agent first.
-	return errors.Join(s.Wait(ctx), s.Close(context.Background()))
-}
-
-// traceFile appends the trace of each transaction to a file right after it
-// commits, so a hung or killed session still leaves its trace.
-type traceFile struct {
-	path string
-	file *os.File
-	h    *aish.Host
-}
-
-func (t *traceFile) Init(_ context.Context, h *aish.Host) error {
-	f, err := os.OpenFile(t.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, logFileMode)
-	if err != nil {
-		return fmt.Errorf("aish: trace: %w", err)
-	}
-	t.file, t.h = f, h
-	h.Observe("write", func(ctx context.Context, c aish.TxCommitted) {
-		if err := trace.Write(t.file, c.Tx); err != nil {
-			t.h.Log().ErrorContext(ctx, "cannot write trace", "err", err)
-		}
-	})
-
-	return nil
-}
-
-func (t *traceFile) Stop(context.Context) error {
-	if t.file == nil {
-		return nil
-	}
-	if err := t.file.Close(); err != nil {
-		return fmt.Errorf("aish: trace: %w", err)
-	}
-
-	return nil
 }

@@ -667,9 +667,9 @@ forbid(principal, action == Action::"fs.write", resource)
 
 ## 9. Запуск и сборка
 
-`cmd/aish` (реализован): `aish [--config Caddyfile] [--resume ID] [--trace FILE]` и `aish list-modules`. Логи идут в `~/.aish/logs/<session>.log`. `--trace FILE` подключает модуль `trace.file`, который дописывает trace каждой транзакции в файл сразу после её коммита. Модули стандартной сборки линкует пакет `modules/standard`. Команды `list-hooks` пока нет.
+`cmd/aish` (реализован) линкует стандартную сборку и вызывает `app.Run()` (пакет `app`; тот же код вызывают бинари, собранные `aish-build`): `aish [--config Caddyfile] [--resume ID] [--trace FILE]` и `aish list-modules`. Логи идут в `~/.aish/logs/<session>.log`. `--trace FILE` подключает модуль `trace.file`, который дописывает trace каждой транзакции в файл сразу после её коммита. Модули стандартной сборки линкует пакет `modules/standard`. Команды `list-hooks` пока нет.
 
-### `aish-build` (не реализован)
+### `aish-build`
 
 ```
 aish-build --with github.com/someone/aish-webchat@v0.2.0 \
@@ -678,9 +678,11 @@ aish-build --with github.com/someone/aish-webchat@v0.2.0 \
            -o ./aish
 ```
 
-1. Генерирует во временной директории `main.go` с blank-импортами стандартной поставки и модулей из `--with`.
-2. Генерирует `go.mod` (`go 1.27`) с `require` и с `replace` для локальных путей.
-3. Запускает `go build`. Команда `aish list-modules` выводит, какие модули вошли в бинарь, а `aish list-hooks` — все подписки с режимами и приоритетами.
+1. Генерирует во временной директории `main.go` с blank-импортами стандартной поставки (список читается из `modules/standard` через `go list`) и модулей из `--with`.
+2. Генерирует `go.mod` (`go 1.27`) с `require` для `@version` и с `replace` для локальных путей; остальные версии выбирает `go mod tidy`.
+3. Запускает `go mod tidy` и `go build`. Команда `aish list-modules` выводит, какие модули вошли в бинарь, а `aish list-hooks` (пока нет) — все подписки с режимами и приоритетами.
+
+Параметры: `--with <module path>[@version][=<local dir>]` (путь модуля — это и импортируемый пакет, как в xcaddy), `--without <пакет>` (пакет стандартной сборки относительно `modules/`: `llm/anthropic`, `tool/fs`; список пакетов берётся из импортов `modules/standard`), `-o` (по умолчанию `./aish`) и `--core <dir>` — собрать против локальной копии ядра вместо опубликованного модуля.
 
 ## 10. Тестирование
 
@@ -723,7 +725,7 @@ aish-build --with github.com/someone/aish-webchat@v0.2.0 \
 | **3. Расширение** | `tool mcp`, `context skills` | MCP-сервер подключается одной директивой, и его вызовы проходят через ту же политику; skill из `SKILL.md` попадает в каталог и читается через tool `skill` |
 | **Проверка заменяемости** | conformance-сценарий (§10) с `frontend cli` и с тестовым фронтендом из пакета `test` | остальные модули и конфиг не меняются, тест зелёный в обоих случаях |
 
-**Статус этапа 1.** Готовы: ядро (`Options`, декодеры событий, JSON для `Stream`), `agent loop`, `frontend cli`, `tool fs_read/fs_edit`, `policy ask`, `store jsonl`, `llm anthropic` (проверен только на тестовом HTTP-сервере, живой вызов API не проверялся), `test.FakeLLM`, загрузчик конфига и `cmd/aish`. Не готовы: `aish-build`, сквозная приёмка с conformance-сценарием (§10).
+**Статус этапа 1.** Готовы: ядро (`Options`, декодеры событий, JSON для `Stream`), `agent loop`, `frontend cli`, `tool fs_read/fs_edit`, `policy ask`, `store jsonl`, `llm anthropic` (проверен только на тестовом HTTP-сервере, живой вызов API не проверялся), `test.FakeLLM`, загрузчик конфига и `cmd/aish`. Готов `aish-build`. Не готова сквозная приёмка с conformance-сценарием (§10).
 
 Вне MVP: `frontend pty` и `tool subagent` с `Spawn`/`Bridge` (проекты в §8), параллельное выполнение tool calls одного ответа, компакция, несколько фронтендов одновременно, `frontend webchat`, hot reload конфига, zsh/fish, `llm openai`, JSON-конфиг.
 
