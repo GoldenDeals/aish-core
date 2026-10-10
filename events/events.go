@@ -1,7 +1,9 @@
 package events
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/GoldenDeals/aish-core"
@@ -142,12 +144,12 @@ type AssistantMessage struct {
 // and usage, which are known only at the end.
 type ContentDelta struct {
 	Type       string
-	Text       string // DeltaText, DeltaThinking
-	Signature  string // DeltaSignature
-	Data       []byte // DeltaRedactedThinking
-	StopReason string // DeltaStop: "end_turn", "tool_use", "max_tokens"
-	Usage      *Usage // DeltaStop
-	ToolID     string // DeltaToolUse: ToolCall.ID
+	Text       string `json:",omitempty"` // DeltaText, DeltaThinking
+	Signature  string `json:",omitempty"` // DeltaSignature
+	Data       []byte `json:",omitempty"` // DeltaRedactedThinking
+	StopReason string `json:",omitempty"` // DeltaStop: "end_turn", "tool_use", "max_tokens"
+	Usage      *Usage `json:",omitempty"` // DeltaStop
+	ToolID     string `json:",omitempty"` // DeltaToolUse: ToolCall.ID
 }
 
 const (
@@ -229,6 +231,95 @@ func (m AssistantMessage) Blocks() []Block {
 	finish("")
 
 	return out
+}
+
+// storedContent is the JSON form of AssistantMessage.Content: a plain reply is
+// {Text, StopReason, Usage}. Thinking, signatures and tool_use markers must be
+// replayed in the order the model produced them, so a reply with any of them
+// keeps its flattened chunks in Blocks instead.
+type storedContent struct {
+	Text       string         `json:",omitempty"`
+	StopReason string         `json:",omitempty"`
+	Usage      *Usage         `json:",omitempty"`
+	Blocks     []ContentDelta `json:",omitempty"`
+}
+
+type storedMessage struct {
+	Provider, Model string
+	Content         json.RawMessage
+}
+
+// MarshalJSON flattens the content: consecutive text chunks, and consecutive
+// thinking chunks, become one chunk.
+func (m AssistantMessage) MarshalJSON() ([]byte, error) {
+	var flat []ContentDelta
+	for _, c := range m.Content.Body() {
+		last := len(flat) - 1
+		if last >= 0 && c.Type == flat[last].Type && (c.Type == DeltaText || c.Type == DeltaThinking) {
+			flat[last].Text += c.Text
+
+			continue
+		}
+		flat = append(flat, c)
+	}
+
+	var sc storedContent
+	for _, c := range flat {
+		switch c.Type {
+		case DeltaText:
+			sc.Text = c.Text
+		case DeltaStop:
+			sc.StopReason, sc.Usage = c.StopReason, c.Usage
+		default:
+			sc.Blocks = flat
+		}
+	}
+	if sc.Blocks != nil {
+		sc = storedContent{Blocks: flat}
+	}
+	content, err := json.Marshal(sc)
+	if err != nil {
+		return nil, fmt.Errorf("aish: encode assistant message: %w", err)
+	}
+
+	return json.Marshal(storedMessage{m.Provider, m.Model, content}) //nolint:wrapcheck // plain encoding of a struct of this package
+}
+
+// UnmarshalJSON reads the object form and, for old journals, the array of chunks.
+func (m *AssistantMessage) UnmarshalJSON(data []byte) error {
+	var sm storedMessage
+	if err := json.Unmarshal(data, &sm); err != nil {
+		return fmt.Errorf("aish: decode assistant message: %w", err)
+	}
+	var body []ContentDelta
+	if raw := bytes.TrimSpace(sm.Content); bytes.HasPrefix(raw, []byte("[")) {
+		if err := json.Unmarshal(raw, &body); err != nil {
+			return fmt.Errorf("aish: decode assistant message: %w", err)
+		}
+	} else if len(raw) > 0 {
+		var sc storedContent
+		if err := json.Unmarshal(raw, &sc); err != nil {
+			return fmt.Errorf("aish: decode assistant message: %w", err)
+		}
+		body = sc.Blocks
+		if body == nil {
+			if sc.Text != "" {
+				body = append(body, ContentDelta{Type: DeltaText, Text: sc.Text})
+			}
+			if sc.StopReason != "" || sc.Usage != nil {
+				body = append(body, ContentDelta{Type: DeltaStop, StopReason: sc.StopReason, Usage: sc.Usage})
+			}
+		}
+	}
+
+	content, w := aish.NewStream[ContentDelta]()
+	for _, c := range body {
+		w.Write(c)
+	}
+	w.Close(nil)
+	*m = AssistantMessage{Provider: sm.Provider, Model: sm.Model, Content: content}
+
+	return nil
 }
 
 // Stop returns the final DeltaStop chunk, if the stream has one.

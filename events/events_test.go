@@ -1,6 +1,7 @@
 package events
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -127,5 +128,70 @@ func TestLLMRequestSectionsAndTools(t *testing.T) {
 	names := []string{r.Tools[0].Name, r.Tools[1].Name}
 	if !slices.Equal(names, []string{"b", "a"}) {
 		t.Errorf("tools = %v, want the order of AppendTool", names)
+	}
+}
+
+func TestAssistantMessageMarshalFlattensChunks(t *testing.T) {
+	content, w := aish.NewStream[ContentDelta]()
+	for _, c := range []ContentDelta{
+		{Type: DeltaText, Text: "Hel"},
+		{Type: DeltaText, Text: "lo"},
+		{Type: DeltaStop, StopReason: "end_turn"},
+	} {
+		w.Write(c)
+	}
+	w.Close(nil)
+
+	data, err := json.Marshal(AssistantMessage{Provider: "p", Content: content})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back AssistantMessage
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	body := back.Content.Body()
+	if len(body) != 2 || body[0].Text != "Hello" || body[1].StopReason != "end_turn" {
+		t.Fatalf("body = %+v, json = %s", body, data)
+	}
+}
+
+func TestAssistantMessageStoredAsObject(t *testing.T) {
+	roundTrip := func(body ...ContentDelta) (string, []ContentDelta) {
+		content, w := aish.NewStream[ContentDelta]()
+		for _, c := range body {
+			w.Write(c)
+		}
+		w.Close(nil)
+		data, err := json.Marshal(AssistantMessage{Provider: "p", Content: content})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var back AssistantMessage
+		if err := json.Unmarshal(data, &back); err != nil {
+			t.Fatal(err)
+		}
+
+		return string(data), back.Content.Body()
+	}
+
+	data, body := roundTrip(ContentDelta{Type: DeltaText, Text: "a"}, ContentDelta{Type: DeltaText, Text: "b"},
+		ContentDelta{Type: DeltaStop, StopReason: "end_turn", Usage: &Usage{OutputTokens: 2}})
+	if want := `{"Provider":"p","Model":"","Content":{"Text":"ab","StopReason":"end_turn","Usage":{"InputTokens":0,"OutputTokens":2,"CacheReadTokens":0,"CacheWriteTokens":0}}}`; data != want {
+		t.Fatalf("json = %s", data)
+	}
+	if len(body) != 2 || body[0].Text != "ab" {
+		t.Fatalf("body = %+v", body)
+	}
+
+	_, body = roundTrip(ContentDelta{Type: DeltaThinking, Text: "t"}, ContentDelta{Type: DeltaSignature, Signature: "s"},
+		ContentDelta{Type: DeltaText, Text: "x"}, ContentDelta{Type: DeltaToolUse, ToolID: "1"})
+	if len(body) != 4 || body[2].Text != "x" || body[3].ToolID != "1" {
+		t.Fatalf("order lost: %+v", body)
+	}
+
+	var old AssistantMessage
+	if err := json.Unmarshal([]byte(`{"Content":[{"Type":"text","Text":"o"}]}`), &old); err != nil || old.Content.Body()[0].Text != "o" {
+		t.Fatalf("array form: %v", err)
 	}
 }
