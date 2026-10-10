@@ -2,6 +2,7 @@ package aish
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -25,6 +26,21 @@ func (h *Host) Options() Options { return h.options }
 
 func (h *Host) Session() SessionInfo { return h.sess.info }
 
+// Agents returns every agent block of the config, in config order.
+func (h *Host) Agents() []AgentSpec { return slices.Clone(h.sess.agents) }
+
+// Agent returns the block this session runs; the zero AgentSpec, with only
+// the name set, when the config has no such block.
+func (h *Host) Agent() AgentSpec {
+	for _, a := range h.sess.agents {
+		if a.Name == h.sess.info.Agent {
+			return a
+		}
+	}
+
+	return AgentSpec{Name: h.sess.info.Agent}
+}
+
 // Log is the only place a module writes logs to: the terminal belongs to the
 // frontend. Records carry session and instance; logged through a *Context
 // method with a hook ctx they also carry tx, event and hook.
@@ -37,17 +53,11 @@ func (h *Host) Journal() *Journal { return &h.sess.journal }
 // write the transactions twice. It is allowed only in Init.
 func (h *Host) Seed(txs ...Tx) error { return h.sess.seed(txs) }
 
-// Cancel cancels the open transaction, if any (Ctrl+C). Its hooks see a
-// cancelled ctx, and it commits with StatusCancelled and everything that
-// happened before.
-func (h *Host) Cancel() {
-	h.sess.mu.Lock()
-	tx := h.sess.cur
-	h.sess.mu.Unlock()
-	if tx != nil {
-		tx.cancel(context.Canceled)
-	}
-}
+// Cancel cancels the open transaction, if any (Ctrl+C), and then the open
+// transactions of the subagents below this session, level by level. Their
+// hooks see a cancelled ctx, and each commits with StatusCancelled and
+// everything that happened before.
+func (h *Host) Cancel() { h.sess.cancelOpen() }
 
 // Mutate subscribes a hook that may change or remove events of type E
 // before Handle hooks see them.
@@ -160,4 +170,59 @@ func (s *session) checkEmit(ev Event) error {
 	s.hooks.checkType(ev.Kind(), reflect.TypeOf(ev))
 
 	return nil
+}
+
+// Hold keeps Session.Wait from returning until release is called, for work a
+// module does outside its hooks and that will emit events when done (a
+// subagent running in the background). release is safe to call more than once;
+// call it after the Emit that delivers the result has returned, so Wait sees
+// the transaction it started.
+func (h *Host) Hold() (release func()) { return h.sess.hold() }
+
+// Spawn starts a new session of the named agent block, one level below this
+// one, and returns it. The caller owns it: it Emits to it, Waits for it and
+// closes it; the parent's Close closes whatever is still open. Spawn fails
+// when the session has no Spawner, the agent is unknown, or the parent is
+// closing.
+func (h *Host) Spawn(ctx context.Context, agent string) (*Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("aish: spawn %s: %w", agent, err)
+	}
+	if h.sess.spawner == nil {
+		return nil, errors.New("aish: spawn: session has no spawner")
+	}
+	instances, err := h.sess.spawner(agent)
+	if err != nil {
+		return nil, fmt.Errorf("aish: spawn %s: %w", agent, err)
+	}
+	parent := h.sess.info
+	child, err := newSessionIn(h.sess.ctx, SessionConfig{
+		ID:            parent.ID + "." + rand.Text()[:8],
+		Agent:         agent,
+		Parent:        parent.ID,
+		Depth:         parent.Depth + 1,
+		Instances:     instances,
+		Log:           h.sess.rawLog,
+		StreamTimeout: h.sess.streamTimeout,
+		Agents:        h.sess.agents,
+		Spawner:       h.sess.spawner,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	h.sess.childMu.Lock()
+	if h.sess.noSpawn {
+		h.sess.childMu.Unlock()
+
+		return nil, ErrClosed
+	}
+	h.sess.children = append(h.sess.children, child)
+	h.sess.childMu.Unlock()
+
+	if err := child.Start(); err != nil {
+		return nil, err
+	}
+
+	return child, nil
 }

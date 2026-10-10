@@ -35,7 +35,8 @@ func (g *Gate) Log(ctx context.Context, msg, tool string) {
 
 func (g *Gate) Ask(ctx context.Context, m *aish.Mut[events.ToolCall]) error {
 	m.Remove()
-	g.h.Log().DebugContext(ctx, "asking the user to allow a tool call", "tool", m.Event().Name, "call", m.Event().ID)
+	g.h.Log().DebugContext(ctx, "asking the user to allow a tool call", "tool", m.Event().Name, "call", m.Event().ID,
+		"input", string(m.Event().Input), "effects", m.Event().Effects)
 	call := aish.Envelope{Meta: m.Meta(), Event: *m.Event()}
 	g.waiting[call.Meta.ID] = call
 

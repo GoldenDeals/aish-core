@@ -1,6 +1,7 @@
 package aish
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -51,12 +52,15 @@ type pending struct {
 }
 
 type sessionConfig struct {
+	parent    context.Context // the session's context ends with it
 	info      SessionInfo
 	log       *slog.Logger
 	now       func() time.Time
 	warnAfter time.Duration
 
 	streamTimeout time.Duration
+	spawner       func(agent string) ([]Instance, error)
+	agents        []AgentSpec
 }
 
 // session runs transactions one at a time. A single runner goroutine
@@ -71,6 +75,14 @@ type session struct {
 	warnAfter time.Duration
 
 	streamTimeout time.Duration
+	spawner       func(agent string) ([]Instance, error)
+	agents        []AgentSpec
+	rawLog        *slog.Logger // the logger the config gave, before session attributes
+	owner         *Session
+
+	childMu  sync.Mutex // not mu: a hook may Spawn while Close holds Session.mu
+	children []*Session
+	noSpawn  bool
 
 	hooks   hookRegistry
 	journal Journal
@@ -81,6 +93,7 @@ type session struct {
 	lastSeq uint64
 	running bool // transactions may run; Seed is no longer allowed
 	busy    bool // the runner took a transaction and has not finished it
+	holds   int  // background work that keeps the session from looking idle
 	closed  bool
 	idle    chan struct{} // closed and replaced whenever the session becomes idle
 
@@ -89,7 +102,7 @@ type session struct {
 }
 
 func newSession(cfg sessionConfig) *session {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(cmp.Or(cfg.parent, context.Background()))
 	s := &session{
 		info:      cfg.info,
 		ctx:       ctx,
@@ -98,6 +111,9 @@ func newSession(cfg sessionConfig) *session {
 		warnAfter: cfg.warnAfter,
 
 		streamTimeout: cfg.streamTimeout,
+		spawner:       cfg.spawner,
+		agents:        cfg.agents,
+		rawLog:        cfg.log,
 		idle:          make(chan struct{}),
 		wake:          make(chan struct{}, 1),
 		stopped:       make(chan struct{}),
@@ -137,7 +153,7 @@ func (s *session) emitCore(ev Event) error {
 func (s *session) waitIdle(ctx context.Context) error {
 	for {
 		s.mu.Lock()
-		if s.closed || (!s.busy && len(s.queue) == 0) {
+		if s.closed || (!s.busy && len(s.queue) == 0 && s.holds == 0) {
 			s.mu.Unlock()
 
 			return nil
@@ -150,6 +166,25 @@ func (s *session) waitIdle(ctx context.Context) error {
 		case <-ctx.Done():
 			return fmt.Errorf("aish: wait: %w", ctx.Err())
 		}
+	}
+}
+
+// hold keeps waitIdle waiting until the returned release is called.
+func (s *session) hold() (release func()) {
+	s.mu.Lock()
+	s.holds++
+	s.mu.Unlock()
+
+	var once sync.Once
+
+	return func() {
+		once.Do(func() {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+
+			s.holds--
+			s.becameIdle()
+		})
 	}
 }
 
@@ -389,6 +424,7 @@ func (s *session) runTx(p *pending) {
 	s.log.Debug("transaction committed", "tx", committed.Seq, "status", committed.Status,
 		"events", len(committed.Events), "trace", len(committed.Trace), "dur", time.Since(begin), "err", err)
 	for _, env := range committed.Events {
+		s.log.Debug("event committed", "tx", committed.Seq, "event", env.Meta.ID, "kind", env.Event.Kind(), s.payload(env.Event))
 		s.observe(env.Event, env.Meta)
 	}
 	s.observe(TxCommitted{Tx: committed}, Meta{Tx: committed.Seq, Time: s.now(), Source: sourceCore})
@@ -448,4 +484,42 @@ func safeCall(fn func() error) (err error) {
 	}()
 
 	return fn()
+}
+
+// takeChildren stops further Spawns and returns the sessions spawned so far.
+func (s *session) takeChildren() []*Session {
+	s.childMu.Lock()
+	defer s.childMu.Unlock()
+
+	s.noSpawn = true
+
+	return s.children
+}
+
+// cancelOpen cancels the open transaction of the session and of every
+// subagent below it.
+func (s *session) cancelOpen() {
+	s.mu.Lock()
+	tx := s.cur
+	s.mu.Unlock()
+	if tx != nil {
+		tx.cancel(context.Canceled)
+	}
+
+	s.childMu.Lock()
+	children := slices.Clone(s.children)
+	s.childMu.Unlock()
+	for _, child := range children {
+		child.s.cancelOpen()
+	}
+}
+
+// payload is the debug attribute with the body of ev. It is empty, and costs
+// nothing, unless debug records are on.
+func (s *session) payload(ev Event) slog.Attr {
+	if !s.log.Enabled(s.ctx, slog.LevelDebug) {
+		return slog.Attr{}
+	}
+
+	return PayloadAttr("payload", ev)
 }

@@ -16,6 +16,7 @@ type SessionInfo struct {
 	ID     string
 	Agent  string // agent block: "main", "reviewer"
 	Parent string // parent session ID of a subagent
+	Depth  int    // 0 for the main agent, parent's Depth+1 for a subagent
 }
 
 // Instance is a configured module instance of a session.
@@ -30,6 +31,7 @@ type SessionConfig struct {
 	ID     string // generated when empty
 	Agent  string
 	Parent string
+	Depth  int // Parent's Depth+1 for a subagent
 	// Instances are in config order: Init and Start run in this order, Stop
 	// in reverse.
 	Instances []Instance
@@ -42,6 +44,13 @@ type SessionConfig struct {
 	// that error. Zero means no limit.
 	StreamTimeout time.Duration
 	Options       Options
+	// Agents are all agent blocks of the config, for Host.Agents; a
+	// subagent gets the same list.
+	Agents []AgentSpec
+	// Spawner creates the module instances of a new session of the named
+	// agent block; Host.Spawn calls it. Without it Spawn fails. Every call
+	// must return fresh instances.
+	Spawner func(agent string) ([]Instance, error)
 }
 
 // Session is a set of module instances and their journal (§4.1).
@@ -56,11 +65,34 @@ type Session struct {
 	inited  int // instances[:inited] passed Init and get Stop on Close
 }
 
+// Emit queues events in a new transaction of the session and waits until it
+// has committed, like a frontend emitting from its Start goroutine. ctx only
+// bounds the wait. It is how a parent talks to a session it spawned.
+func (s *Session) Emit(ctx context.Context, evs ...Event) error {
+	for _, ev := range evs {
+		if err := s.s.checkEmit(ev); err != nil {
+			return err
+		}
+	}
+	if len(evs) == 0 {
+		return nil
+	}
+	p := &pending{events: slices.Clone(evs), source: sourceExternal, done: make(chan error, 1)}
+
+	return s.s.enqueue(ctx, p)
+}
+
 var instanceNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*\.[a-z][a-z0-9_-]*(/[A-Za-z0-9_.-]+)?$`)
 
 // NewSession checks the instances and runs Validate on them. It has no other
 // side effects: a config error shows up before any module starts.
 func NewSession(cfg SessionConfig) (*Session, error) {
+	return newSessionIn(context.Background(), cfg)
+}
+
+// newSessionIn is NewSession for a session whose context ends with parent:
+// a subagent stops when the session that spawned it does.
+func newSessionIn(parent context.Context, cfg SessionConfig) (*Session, error) {
 	var errs []error
 	seen := map[string]bool{}
 	for _, inst := range cfg.Instances {
@@ -84,14 +116,15 @@ func NewSession(cfg SessionConfig) (*Session, error) {
 		return nil, err
 	}
 
-	info := SessionInfo{ID: cfg.ID, Agent: cfg.Agent, Parent: cfg.Parent}
+	info := SessionInfo{ID: cfg.ID, Agent: cfg.Agent, Parent: cfg.Parent, Depth: cfg.Depth}
 	if info.ID == "" {
 		info.ID = rand.Text()
 	}
 	s := &Session{
-		s:         newSession(sessionConfig{info: info, log: cfg.Log, streamTimeout: cfg.StreamTimeout}),
+		s:         newSession(sessionConfig{parent: parent, info: info, log: cfg.Log, streamTimeout: cfg.StreamTimeout, spawner: cfg.Spawner, agents: slices.Clone(cfg.Agents)}),
 		instances: slices.Clone(cfg.Instances),
 	}
+	s.s.owner = s
 	for _, inst := range s.instances {
 		h := s.s.host(inst.Name)
 		h.options = cfg.Options
@@ -126,6 +159,12 @@ func (s *Session) Start() error {
 		return err
 	}
 
+	names := make([]string, len(s.instances))
+	for i, inst := range s.instances {
+		names[i] = inst.Name
+	}
+	s.s.log.Debug("session starting", "agent", s.s.info.Agent, "parent", s.s.info.Parent, "depth", s.s.info.Depth,
+		"instances", names)
 	s.s.start()
 	startCtx := s.s.startContext()
 	for _, inst := range s.instances {
@@ -212,6 +251,9 @@ func (s *Session) closeLocked(ctx context.Context) error {
 	s.closed = true
 	s.s.log.Debug("session closing")
 	var errs []error
+	for _, child := range s.s.takeChildren() {
+		errs = append(errs, child.Close(ctx))
+	}
 	if err := s.s.close(ctx); err != nil {
 		errs = append(errs, err)
 	}

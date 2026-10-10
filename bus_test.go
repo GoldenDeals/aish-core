@@ -860,3 +860,73 @@ func TestPolicyAsksAndReemits(t *testing.T) {
 		})
 	}
 }
+
+func TestHookFailureIsLoggedOnceAsError(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	s := newSession(sessionConfig{log: slog.New(slog.NewTextHandler(&logs, nil))})
+	s.start()
+	t.Cleanup(func() { _ = s.close(context.Background()) })
+	ctx := s.startContext()
+	h := s.host("m")
+
+	h.Handle("inner", func(context.Context, result) error { return errors.New("no credentials") })
+	other := s.host("n")
+	other.Handle("outer", func(ctx context.Context, _ note) error {
+		return other.Emit(ctx, result{})
+	})
+
+	if err := h.Emit(ctx, note{}); err == nil {
+		t.Fatal("Emit succeeded")
+	}
+
+	var errs []ModuleError
+	for _, env := range s.lastTx(t).Events {
+		if e, ok := env.Event.(ModuleError); ok {
+			errs = append(errs, e)
+		}
+	}
+	if len(errs) != 2 || errs[0].Nested || !errs[1].Nested {
+		t.Fatalf("module errors = %+v, want the root cause and one nested", errs)
+	}
+	if n := strings.Count(logs.String(), "level=ERROR"); n != 1 || !strings.Contains(logs.String(), "no credentials") {
+		t.Fatalf("want one ERROR record with the cause, got:\n%s", logs.String())
+	}
+}
+
+func TestDebugLogCarriesEventBodies(t *testing.T) {
+	t.Parallel()
+
+	for level, wantBody := range map[slog.Level]bool{slog.LevelDebug: true, slog.LevelInfo: false} {
+		var logs bytes.Buffer
+		s := newSession(sessionConfig{log: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: level}))})
+		s.start()
+		ctx := s.startContext()
+		h := s.host("m")
+		h.Handle("h", func(context.Context, call) error { return nil })
+
+		if err := h.Emit(ctx, call{Name: "fs_read", Args: map[string]any{"path": "/etc/hosts"}}); err != nil && !errors.Is(err, ErrUnhandled) {
+			t.Fatal(err)
+		}
+		_ = s.close(context.Background())
+
+		got := logs.String()
+		// The text handler quotes the JSON, so the body shows with escaped quotes.
+		for _, msg := range []string{`msg="event emitted"`, `msg="event committed"`} {
+			line := lineWith(got, msg)
+			if has := strings.Contains(line, `\"path\":\"/etc/hosts\"`); has != wantBody {
+				t.Errorf("level %v, %s: body logged = %t, want %t\n%s", level, msg, has, wantBody, got)
+			}
+		}
+	}
+}
+
+func lineWith(logs, needle string) string {
+	for _, l := range strings.Split(logs, "\n") {
+		if strings.Contains(l, needle) {
+			return l
+		}
+	}
+
+	return ""
+}

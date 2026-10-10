@@ -5,6 +5,7 @@ package cli
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -58,6 +59,8 @@ func (c *CLI) Init(_ context.Context, h *aish.Host) error {
 	h.Handle("ask", c.ask)
 	h.Handle("show-call", c.showCall, aish.Priority(0))
 	h.Handle("show-stopped", c.showStopped)
+	h.Handle("show-agent-return", c.showAgentReturn)
+	h.Observe("show-error", c.showError)
 	h.Observe("busy-start", func(context.Context, aish.TxStarted) { c.busy.Store(true) })
 	h.Observe("busy-end", func(context.Context, aish.TxCommitted) { c.busy.Store(false) })
 
@@ -154,7 +157,7 @@ func (c *CLI) send(ctx context.Context, msgs <-chan string) {
 	defer close(c.done)
 	for text := range msgs {
 		if strings.TrimSpace(text) != "" {
-			c.h.Log().DebugContext(ctx, "sending user message", "chars", len(text))
+			c.h.Log().DebugContext(ctx, "sending user message", "chars", len(text), "text", text)
 			err := c.h.Emit(ctx, events.UserMessage{Text: text, Source: source})
 			if err != nil && !errors.Is(err, aish.ErrUnhandled) {
 				c.h.Log().Error("cannot send message", "err", err)
@@ -189,6 +192,25 @@ func (c *CLI) showMessage(ctx context.Context, m events.AssistantMessage) error 
 	c.printf("\n")
 	if err := m.Content.Err(); err != nil {
 		return fmt.Errorf("aish: frontend.cli: %w", err)
+	}
+
+	return nil
+}
+
+// showError prints the failures that stopped something; a nested one repeats
+// the failure of another hook.
+func (c *CLI) showError(_ context.Context, e aish.ModuleError) {
+	if e.Nested {
+		return
+	}
+	c.printf("[error] %s: %s\n", cmp.Or(e.Hook, e.Instance, "core"), e.Error)
+}
+
+func (c *CLI) showAgentReturn(_ context.Context, e events.AgentReturn) error {
+	if e.IsError {
+		c.printf("[agent %s] failed: %s\n", e.Agent, e.Text)
+	} else {
+		c.printf("[agent %s] returned\n", e.Agent)
 	}
 
 	return nil

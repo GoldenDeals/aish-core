@@ -17,6 +17,7 @@
 }
 
 main {
+    description "Main agent"
     max_steps 50
     agent loop
 
@@ -34,6 +35,7 @@ main {
     context skills ./.agents/skills ./examples/skills
     import files
     tool bash
+    subagents core
 
     tool mcp exa {
         url https://mcp.exa.ai/mcp?exaApiKey={$EXA_API_KEY}
@@ -53,4 +55,21 @@ main {
         # New segment <session>.<unix time>.jsonl after this long; resume reads all.
         rotate 24h
     }
+}
+
+# A subagent is a full agent of its own: nothing is inherited from main.
+# main calls it with the task tool; it is offered to every agent whose
+# block has "subagents core".
+reviewer {
+    description "Reads files and reports problems; never edits"
+    max_depth 1
+    agent loop
+    context system_prompt
+    llm anthropic {
+        model claude-haiku-5-5
+        api_key "{$ANTHROPIC_API_KEY}"
+        base_url http://127.0.0.1:8317
+    }
+    tool fs_read
+    policy cedar ./examples/policies/allow-all.cedar
 }

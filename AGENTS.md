@@ -51,7 +51,7 @@ CI (`.github/workflows/ci.yml`) сначала запускает линт, по
 
 - `aish` (корень) — ядро; `events` — общие типы событий; `transcript` — хелпер; `test` — тестовые хелперы (`NewSession`, `NewSessionWith`, `Frontend`, `FakeLLM`).
 - `modules/<namespace>/<name>` — модули (`agent/loop`, `frontend/cli`, `policy/ask`, `store/jsonl`, `tool/fs`); `modules/standard` линкует стандартную сборку. Новый модуль регистрируется в `init()` и добавляется в `modules/standard`.
-- `config` — загрузчик Agentfile; `app` — запуск сессии (флаги, логи, сигналы); `cmd/aish` — точка входа со стандартной сборкой; `cmd/aish-build` — сборка бинаря с другим набором модулей. Список стандартных модулей — только импорты в `modules/standard`: `aish-build` читает его оттуда. Модуль читает свою директиву в `UnmarshalCaddyfile` (`Dispenser` стоит на первом токене директивы, имя модуля пропускай `d.NextArg()`), аргументы разбирай через `RemainingArgs` (`NextArg` возвращает и `{`).
+- `modules/config/agentfile` — загрузчик Agentfile (`config.agentfile`), подключаемый как `aish.ConfigLoader`; настройки агента объявляют сами модули через `aish.RegisterDirective`, а не загрузчик; `app` — запуск сессии (флаги, логи, сигналы); `cmd/aish` — точка входа со стандартной сборкой; `cmd/aish-build` — сборка бинаря с другим набором модулей. Список стандартных модулей — только импорты в `modules/standard`: `aish-build` читает его оттуда. Модуль читает свою директиву в `UnmarshalCaddyfile` (`Dispenser` стоит на первом токене директивы, имя модуля пропускай `d.NextArg()`), аргументы разбирай через `RemainingArgs` (`NextArg` возвращает и `{`).
 
 ### События и хуки
 

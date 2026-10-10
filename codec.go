@@ -7,11 +7,10 @@ import (
 	"sync"
 )
 
-// Options are the global settings every module can read through
-// Host.Options.
+// Options are the settings of the run itself that every module can read
+// through Host.Options. Settings of an agent belong to AgentSpec.
 type Options struct {
-	MaxSteps int    // agent steps per user message; zero means the module default
-	Resume   string // session ID to restore, empty for a new session
+	Resume string // session ID to restore, empty for a new session
 }
 
 func init() {

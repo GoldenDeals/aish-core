@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -92,6 +93,9 @@ func (a *Anthropic) respond(ctx context.Context, r events.LLMRequest) error {
 	params := a.params(r)
 	a.h.Log().DebugContext(ctx, "sending LLM request", "model", params.Model, "messages", len(params.Messages),
 		"tools", len(params.Tools), "max_tokens", params.MaxTokens)
+	if a.h.Log().Enabled(ctx, slog.LevelDebug) {
+		a.h.Log().DebugContext(ctx, "LLM request body", aish.PayloadAttr("request", params))
+	}
 	content, w := aish.NewStream[events.ContentDelta]()
 	result := make(chan streamResult, 1)
 	// The stream is written from its own goroutine: Emit below returns only
@@ -143,7 +147,11 @@ func (a *Anthropic) stream(ctx context.Context, params sdk.MessageNewParams, w *
 		return streamResult{err: fmt.Errorf("stream: %w", err)}
 	}
 	a.h.Log().DebugContext(ctx, "LLM response received", "stop_reason", msg.StopReason,
-		"input_tokens", msg.Usage.InputTokens, "output_tokens", msg.Usage.OutputTokens)
+		"input_tokens", msg.Usage.InputTokens, "output_tokens", msg.Usage.OutputTokens,
+		"cache_read_tokens", msg.Usage.CacheReadInputTokens, "cache_write_tokens", msg.Usage.CacheCreationInputTokens)
+	if a.h.Log().Enabled(ctx, slog.LevelDebug) {
+		a.h.Log().DebugContext(ctx, "LLM response body", aish.PayloadAttr("response", msg.Content))
+	}
 	w.Write(events.ContentDelta{
 		Type:       events.DeltaStop,
 		StopReason: string(msg.StopReason),

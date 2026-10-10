@@ -4,6 +4,8 @@
 package transcript
 
 import (
+	"fmt"
+
 	aish "github.com/GoldenDeals/aish-core"
 	"github.com/GoldenDeals/aish-core/events"
 	"github.com/GoldenDeals/aish-core/internal/deepcopy"
@@ -108,6 +110,9 @@ func (b *builder) tx(tx aish.Tx) {
 		case events.UserMessage:
 			flush()
 			b.add(events.RoleUser, userBlocks(ev)...)
+		case events.AgentReturn:
+			flush()
+			b.add(events.RoleUser, agentReturnBlock(ev))
 		case events.AssistantMessage:
 			flush()
 			b.add(events.RoleAssistant, placeCalls(ev.Blocks(), calls, placed)...)
@@ -151,6 +156,17 @@ func userBlocks(m events.UserMessage) []events.Block {
 	}
 
 	return append(out, m.Blocks...)
+}
+
+// agentReturnBlock wraps the answer in a tag so the model can tell it from
+// text the user wrote.
+func agentReturnBlock(r events.AgentReturn) events.Block {
+	attrs := fmt.Sprintf("agent=%q call=%q", r.Agent, r.CallID)
+	if r.IsError {
+		attrs += " error=\"true\""
+	}
+
+	return events.Block{Type: events.BlockText, Text: "<agent_return " + attrs + ">\n" + r.Text + "\n</agent_return>"}
 }
 
 func resultBlock(c events.ToolCall, results map[string]events.ToolResult) events.Block {

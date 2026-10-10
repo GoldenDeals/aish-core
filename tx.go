@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sync"
 	"time"
@@ -143,7 +144,8 @@ func (tx *txState) deliver(ev Event, opts EmitOpts, sender *hook, source string,
 		return err
 	}
 	tx.addTrace(TraceEntry{Event: meta.ID, Kind: kind, Hook: source, Action: TraceEmit, Depth: depth})
-	tx.s.log.Debug("event emitted", "tx", tx.seq, "event", meta.ID, "kind", kind, "source", source, "depth", depth)
+	tx.s.log.Debug("event emitted", "tx", tx.seq, "event", meta.ID, "kind", kind, "source", source, "depth", depth,
+		tx.s.payload(ev))
 
 	var errs []error
 	handled := false
@@ -212,7 +214,7 @@ func (tx *txState) admit(hk *hook, rec *record, ev Event, opts EmitOpts, sender 
 	if _, dup := tx.seen[key]; dup {
 		kind := rec.env.Event.Kind()
 		tx.addTrace(TraceEntry{Event: key.id, Kind: kind, Hook: hk.info.ID, Action: TraceDuplicate, Depth: depth})
-		tx.moduleError(hk, fmt.Sprintf("event %s (%s) delivered to the hook twice in one transaction; dropped", key.id, kind))
+		tx.moduleError(hk, fmt.Sprintf("event %s (%s) delivered to the hook twice in one transaction; dropped", key.id, kind), false)
 
 		return false, nil
 	}
@@ -290,18 +292,26 @@ func (tx *txState) invoke(hk *hook, meta Meta, depth int, fn func(ctx context.Co
 }
 
 func (tx *txState) hookFailed(hk *hook, err error) error {
-	tx.moduleError(hk, err.Error())
+	_, nested := errors.AsType[*HookError](err)
+	tx.moduleError(hk, err.Error(), nested)
 
 	return &HookError{Hook: hk.info.ID, Err: err}
 }
 
-// moduleError records a module.error event. It is not delivered to Mutate or
-// Handle hooks and does not count towards the event limit.
-func (tx *txState) moduleError(hk *hook, msg string) {
-	ev := ModuleError{Error: msg}
+// moduleError records a module.error event and logs it as an error; a nested
+// one is only passing on a failure that was logged where it happened. The
+// event is not delivered to Mutate or Handle hooks and does not count towards
+// the event limit.
+func (tx *txState) moduleError(hk *hook, msg string, nested bool) {
+	ev := ModuleError{Error: msg, Nested: nested}
 	if hk != nil {
 		ev.Instance, ev.Hook = hk.info.Instance, hk.info.ID
 	}
+	level := slog.LevelError
+	if nested {
+		level = slog.LevelDebug
+	}
+	tx.s.log.Log(tx.ctx, level, "hook failed", "tx", tx.seq, "hook", ev.Hook, "err", msg)
 	tx.appendCoreEvent(ev)
 }
 

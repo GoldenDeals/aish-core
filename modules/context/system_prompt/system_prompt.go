@@ -81,7 +81,7 @@ func (s *SystemPrompt) Init(_ context.Context, h *aish.Host) error {
 	if err != nil {
 		return err
 	}
-	h.Log().Debug("system prompt resolved", "bytes", len(text))
+	h.Log().Debug("system prompt resolved", "bytes", len(text), aish.PayloadAttr("text", text))
 	h.Mutate("base", func(_ context.Context, m *aish.Mut[events.LLMRequest]) error {
 		m.Event().Section(BaseSection).Text = text
 

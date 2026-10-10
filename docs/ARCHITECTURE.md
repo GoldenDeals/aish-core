@@ -21,13 +21,13 @@
 | `policy cedar` | политики на Cedar |
 | `policy ask` | простая политика по умолчанию |
 | `context skills` | Agent Skills |
-| `tool subagent` | сабагенты (**после MVP**) |
+| `subagents core` | tool `task`: вызов другого агента из Agentfile |
 | `store jsonl` | сохранение и восстановление сессий |
 
 ## 2. Принципы
 
 1. **Статическая сборка, как в Caddy.** Плагины подключаются blank-импортом и регистрируются в `init()`. Бинарь пересобирается утилитой `aish-build` (аналог `xcaddy`). Go `plugin` (.so) не используем: он требует совпадения версий Go и всех зависимостей и не работает на Windows.
-2. **Ядро — это тулинг и общие типы.** Логики агента в ядре нет. В нём только шина событий с транзакциями, журнал закоммиченных транзакций, реестр модулей, загрузка конфига, типы событий самого ядра и хелперы для модулей. Общие типы событий агента (§5) вынесены в пакет `events`: он импортирует `aish`, ядро о нём не знает. Хелперы, которым хватает публичного API, живут в отдельных пакетах, например сборка `messages` из журнала в пакете `transcript` (§4.7). Всё остальное — модули.
+2. **Ядро — это тулинг и общие типы.** Логики агента в ядре нет. В нём только шина событий с транзакциями, журнал закоммиченных транзакций, реестр модулей и загрузчиков конфига (сам загрузчик — подключаемый модуль `config.agentfile`), типы событий самого ядра и хелперы для модулей. Общие типы событий агента (§5) вынесены в пакет `events`: он импортирует `aish`, ядро о нём не знает. Хелперы, которым хватает публичного API, живут в отдельных пакетах, например сборка `messages` из журнала в пакете `transcript` (§4.7). Всё остальное — модули.
 3. **У всех модулей один интерфейс.** Ролей вида `Frontend`/`Tool`/`Policy` нет. Модуль в `Init` подписывается на события, и этим определяется, что он делает. Один модуль может делать много вещей: `frontend pty` отвечает за ввод, вывод, tool `shell`, контекст терминала и вопросы пользователю.
 4. **Модули общаются только через события ядра.** Прямых вызовов между модулями нет: ни запросов к модели, ни подтверждений, ни стриминга токенов. Модуль знает типы событий, а не другие модули.
 5. **Журнал — это последовательность закоммиченных транзакций.** Закоммиченная транзакция неизменяема, журнал только дописывается. Пока транзакция не закоммичена, её события можно менять, удалять и порождать новые.
@@ -97,8 +97,9 @@ func RegisterModule(info ModuleInfo)
 Жизненный цикл сессии задаёт публичный тип `Session`. Загрузчик конфига (этап 1) и тесты создают сессию из уже созданных экземпляров модулей:
 
 ```go
-func NewSession(cfg SessionConfig) (*Session, error) // SessionConfig: ID, Agent, Parent, Instances []Instance{Name, Module}, Log, StreamTimeout, Options
+func NewSession(cfg SessionConfig) (*Session, error) // SessionConfig: ID, Agent, Parent, Depth, Instances []Instance{Name, Module}, Agents []AgentSpec, Log, StreamTimeout, Options, Spawner
 func (s *Session) Start() error
+func (s *Session) Emit(ctx context.Context, evs ...Event) error // новая транзакция сессии, ждёт коммита; `ctx` только ограничивает ожидание
 func (s *Session) Wait(ctx context.Context) error    // ждёт простоя (§4.8)
 func (s *Session) Close(ctx context.Context) error
 func (s *Session) Journal() *Journal
@@ -125,7 +126,9 @@ type Host struct{ /* ... */ }
 func (h *Host) Session() SessionInfo   // ID, агент ("main", "reviewer"), родительская сессия
 func (h *Host) Instance() string       // экземпляр модуля: "llm.anthropic/fast"
 func (h *Host) Log() *slog.Logger      // единый логгер модуля, см. «Логирование»
-func (h *Host) Options() Options       // глобальные опции: MaxSteps, Resume (ID восстанавливаемой сессии); задаются в SessionConfig.Options
+func (h *Host) Options() Options       // опции запуска: Resume (ID восстанавливаемой сессии); задаются в SessionConfig.Options
+func (h *Host) Agent() AgentSpec       // блок конфига, который выполняет эта сессия: Name, Global и Own — значения по типам (aish.Get[T])
+func (h *Host) Agents() []AgentSpec    // все блоки конфига; смысл их настроек знают только владеющие ими модули
 
 // Подписка (§4.4)
 func (h *Host) Mutate[E Event](name string, fn func(context.Context, *Mut[E]) error, opts ...HookOpt) Sub
@@ -135,7 +138,7 @@ func (h *Host) Observe[E Event](name string, fn func(context.Context, E), opts .
 // Порождение событий (§4.3)
 func (h *Host) Emit(ctx context.Context, evs ...Event) error
 func (h *Host) EmitWith(ctx context.Context, o EmitOpts, evs ...Event) error
-func (h *Host) Cancel()                     // отменить открытую транзакцию (Ctrl+C)
+func (h *Host) Cancel()                     // отменить открытую транзакцию и открытые транзакции всех сабагентов ниже (Ctrl+C)
 
 // Чтение и интроспекция
 func (h *Host) Journal() *Journal           // закоммиченные транзакции, только чтение
@@ -145,7 +148,8 @@ func (h *Host) Hooks[E Event]() []HookInfo  // кто подписан на E: �
 func (h *Host) Seed(txs ...Tx) error        // §4.8
 
 // Сессии
-func (h *Host) Spawn(ctx context.Context, agent string, opts ...SpawnOpt) (*Session, error) // §4.8, после MVP
+func (h *Host) Hold() (release func())  // не даёт Session.Wait вернуться, пока идёт фоновая работа модуля (сабагент); §4.8
+func (h *Host) Spawn(ctx context.Context, agent string) (*Session, error) // §4.8
 
 type Sub interface{ Remove() }              // отписка, например MCP при list_changed
 ```
@@ -155,8 +159,10 @@ type Sub interface{ Remove() }              // отписка, например 
 **Логирование.** Модули пишут логи только через `h.Log()`. Это обычный `*slog.Logger`, а его handler настраивает ядро.
 - Каждая запись содержит поля `session` и `instance`. Если писать через `*Context`-методы (`h.Log().InfoContext(ctx, ...)`) с `ctx` хука, добавляются ещё `tx`, `event` и `hook`. Это позволяет сопоставить лог с `log trace`.
 - Записи получает `SessionConfig.Log`; без него они отбрасываются. Куда и с каким уровнем писать, задаёт глобальный конфиг (этап 1). По умолчанию записи идут в файл `~/.aish/logs/<session>.log`, а не в stdout/stderr: терминал принадлежит фронтенду, и логи не должны ломать его вывод.
+- На уровне debug ядро пишет тела событий: `event emitted` (в момент порождения) и `event committed` (итог после Mutate-хуков и закрытия потоков) с атрибутом `payload` — JSON события, обрезанный до 64 КиБ (`aish.PayloadAttr`). Поэтому в debug-логе видны сообщения пользователя, аргументы и результаты tools, ответы ассистента. `llm.anthropic` дополнительно пишет полное тело запроса (`LLM request body`: system, tools, messages) и ответа (`LLM response body`) с токенами кэша, а модули контекста — собранный текст промпта. Лог с уровнем debug содержит содержимое файлов и переписку: хранить его нужно как секрет. На других уровнях тела не кодируются.
+- Модули-tools пишут вызов (`running tool`) и успешное завершение (`tool finished`) с уровнем info, а ошибку выполнения (`tool failed`, `tool.result` с `is_error`) — с уровнем warn.
 - Уровень можно будет переопределить для отдельного экземпляра модуля; это тоже часть конфига.
-- Логи — это не события. Они не идут через шину и не попадают в журнал. Ошибки хуков, важные для сессии, остаются событиями `module.error`.
+- Логи — это не события. Они не идут через шину и не попадают в журнал. Ошибки хуков, важные для сессии, остаются событиями `module.error`; кроме того, ядро пишет каждую такую ошибку в лог с уровнем error (вложенную, которая лишь передаёт сбой другого хука, — с уровнем debug), а `frontend cli` показывает её строкой `[error] <хук>: <текст>`.
 
 ### 4.3 События и транзакции
 
@@ -354,6 +360,7 @@ func transcript.Build(txs []aish.Tx) []aish.Message // обычно Build(h.Jour
 Правила преобразования общих типов в `messages`:
 
 - `user.message` превращается в сообщение `user`: текст, затем блоки, которые добавили Mutate-хуки.
+- `agent.return` тоже превращается в сообщение `user` с текстом `<agent_return agent="…" call="…" [error="true"]>…</agent_return>`: тег отличает ответ агента от слов пользователя.
 - `assistant.message` вместе с `tool.call` той же транзакции превращается в одно сообщение `assistant`: блоки thinking и `text` в порядке потока (`AssistantMessage.Blocks`), затем `tool_use`. Отклонённые вызовы (`Denied`) тоже попадают сюда.
 - `tool.result` превращается в блоки `tool_result` следующего сообщения `user`. Результат ищется по `CallID == ToolCall.ID` только в транзакции вызова.
 - Подряд идущие сообщения одной роли склеиваются. Так результаты tools и сообщение, написанное во время шага, идут модели одним сообщением, результаты первыми.
@@ -394,9 +401,13 @@ func (r *LLMRequest) Section(name string) *Section // "base", "skills", "termina
 Сессия — это экземпляры модулей плюс журнал. Специальных хуков для восстановления нет.
 
 - **Восстановление.** `store jsonl` в своём `Init` при `--resume <id>` читает файл и вызывает `h.Seed(txs...)`. `Seed` доступен только в `Init` и кладёт транзакции в журнал без хуков. `Seq` восстанавливаемых транзакций должны возрастать, и новые транзакции продолжают нумерацию, поэтому ID событий `<seq>.<n>` остаются уникальными. Поэтому tools не выполняются заново, а store не дописывает транзакции повторно: он слушает `tx.committed`, а `Seed` его не порождает. Фронтенд в `Start` читает `h.Journal()` и рисует историю. Для остальных модулей восстановленная сессия ничем не отличается от новой, поэтому события `session.resumed` нет. Состояние шелла не восстанавливается, только разговор.
-- **Сабагент (после MVP).** `h.Spawn(ctx, "reviewer")` создаёт новую сессию из блока `reviewer`: свежие экземпляры его модулей, пустой журнал, ссылка на родителя в `SessionInfo`. Возвращает `*Session` с методами `Emit`, `Wait` и `Journal`.
-- **Простой.** Сессия простаивает, когда нет открытой транзакции и очередь пуста. Горутины самих модулей (фронтенд ждёт ввода) не учитываются: они могут породить событие и после `Wait`. Observe-хуки синхронны, поэтому фоновой работы ядра нет. Это определяет ядро, отдельное событие не нужно. Гонки нет, потому что Observe-хук, который порождает новую транзакцию (`agent loop`), ставит её в очередь до своего возврата. `Session.Wait` ждёт простоя.
-- **Мост (после MVP).** `Spawn(..., aish.Bridge[UserQuestion]())` пересылает события указанного типа из дочерней сессии в транзакцию родителя, внутри которой работает `tool subagent`. Так сабагент может спросить пользователя через фронтенд `main`.
+- **Сабагент.** `h.Spawn(ctx, "reviewer")` создаёт новую сессию из блока `reviewer`: свежие экземпляры его модулей, пустой журнал, ссылка на родителя и глубина в `SessionInfo`. Возвращает `*Session` с методами `Emit`, `Wait`, `Journal` и `Close`.
+  - Ядро не знает про формат конфига: свежие экземпляры даёт `SessionConfig.Spawner` (его задаёт `app`, он берёт `aish.Config.Build` у загрузчика). Без `Spawner` `Spawn` возвращает ошибку.
+  - Блок сабагента полностью независим от `main`: свои `llm`, `policy`, tools, `context`, `store`. Ничего не наследуется.
+  - Глубину вложенности ядро не ограничивает: `SessionInfo.Depth` — только факт, лимит проверяет модуль, который вызывает `Spawn` (`subagents.core`). `Options.Resume` ребёнок не получает.
+  - Завершение каскадное на любой глубине: контекст сессии сабагента порождён от контекста сессии-родителя, поэтому его закрытие отменяет всех потомков, а `Close` родителя закрывает детей (и их детей), которых не закрыл вызывающий. `Host.Cancel` (Ctrl+C) отменяет открытую транзакцию сессии и рекурсивно открытые транзакции всех её сабагентов; отменённый `agent loop` ребёнка не продолжает, и родитель получает `agent.return` с ошибкой «agent was cancelled».
+- **Простой.** Сессия простаивает, когда нет открытой транзакции и очередь пуста. Горутины самих модулей (фронтенд ждёт ввода) не учитываются: они могут породить событие и после `Wait`. Observe-хуки синхронны, поэтому фоновой работы ядра нет. Это определяет ядро, отдельное событие не нужно. Гонки нет, потому что Observe-хук, который порождает новую транзакцию (`agent loop`), ставит её в очередь до своего возврата. `Session.Wait` ждёт простоя. Исключение — модуль, которому нужно, чтобы `Wait` дождался его фоновой работы (сабагент): он берёт `h.Hold()` и отпускает его после `Emit`, который доставил результат; пока `Hold` взят, сессия не считается простаивающей.
+- **Мост (после MVP, не реализован).** `Spawn(..., aish.Bridge[UserQuestion]())` пересылает события указанного типа из дочерней сессии в транзакцию родителя, внутри которой работает `subagents core`. Так сабагент может спросить пользователя через фронтенд `main`.
 
 ## 5. Общие типы событий
 
@@ -408,6 +419,7 @@ func (r *LLMRequest) Section(name string) *Section // "base", "skills", "termina
 | `tx.started` | `TxStarted` | seq, корневое событие | Observe | ядро |
 | `tx.committed` | `TxCommitted` | `Tx` | Observe | ядро |
 | `user.message` | `UserMessage` | text, blocks, source | все | фронтенд; родитель при вызове сабагента |
+| `agent.return` | `AgentReturn` | call id, agent, session, text, is_error | все | `subagents core`: ответ сабагента, пришедший позже `tool.result` вызова |
 | `user.question` | `UserQuestion` | id, text, options, ref | все | политика или любой модуль, которому нужен ответ человека |
 | `user.answer` | `UserAnswer` | question id, choice, text | все | фронтенд |
 | `llm.request` | `LLMRequest` | provider, trigger, system, tools, messages, params | все | `agent loop` |
@@ -415,7 +427,7 @@ func (r *LLMRequest) Section(name string) *Section // "base", "skills", "termina
 | `tool.call` | `ToolCall` | id, name, input, effects, denied | все | LLM-провайдер; политика при повторном порождении |
 | `tool.result` | `ToolResult` | call id, content, is_error, live (необязательный `Stream` вывода) | все | tool; политика при отказе |
 | `compacted` | `Compacted` | up to tx, summary | все | модуль компакции (после MVP) |
-| `module.error` | `ModuleError` | экземпляр, хук, ошибка | Observe | ядро |
+| `module.error` | `ModuleError` | экземпляр, хук, ошибка, `Nested` (ошибка лишь передаёт сбой другого хука) | Observe | ядро |
 | `loop.stopped` | `LoopStopped` | reason (`max_steps`) | все | `agent loop` |
 
 `tx.started` и `tx.committed` в журнал не пишутся (§4.3).
@@ -482,12 +494,14 @@ sequenceDiagram
 
 > Раздел будет пересмотрен отдельно. Блок `hooks { order … before … }` устарел после перехода на числовые приоритеты (§4.4).
 >
-> **Что реализовано в MVP** (пакет `config`, пример — `examples/Agentfile`):
-> - один блок агента `main`; другие блоки (сабагенты) дают ошибку;
+> **Что реализовано в MVP** (модуль `config.agentfile`, пакет `modules/config/agentfile`, пример — `examples/Agentfile`):
+> - каждый блок верхнего уровня — независимый агент; `main` обязателен и запускается по умолчанию, остальные запускаются через `Host.Spawn`. Наследования между блоками нет;
+> - загрузчик не знает ни одной опции агента. Опцию (`max_steps`, `max_depth`, `description`, `inject`) объявляет модуль через `aish.RegisterDirective(name, fn)` в `init()` и хранит значение в `aish.Values` под своим типом настроек (`aish.Set`/`aish.Get`). Директива из реестра ищется раньше модуля `<namespace> <name>`. Глобальный блок и блок агента пишутся в раздельные слои `AgentSpec.Global` и `AgentSpec.Own`, как их слить, решает владеющий модуль; обработчик узнаёт, какой блок читает, из `aish.Scope`. Без модуля в сборке директива даёт ошибку конфига;
+> - загрузчик — тоже подключаемый компонент: `aish.ConfigLoader` регистрируется через `aish.RegisterConfigLoader("config.agentfile", …)`, `app` выбирает его флагом `--loader` (по умолчанию `config.agentfile`) и получает `aish.Config{Agents, Build}`. Другой формат конфига — другой загрузчик; реестр директив нужен только тем загрузчикам, которым он удобен;
+> - опции модулей: `agent loop` владеет `max_steps N`; `subagents.core` — `max_depth N` (абсолютное значение, либо `+n`/`-n` относительно глобального; по умолчанию 2), `description "…"` и `inject on|off`. Глобальный `max_depth` только абсолютный; `description` и `inject` в глобальном блоке — ошибка;
 > - директива `<namespace> <name> [args] { ... }` создаёт модуль `<namespace>.<name>` и передаёт её в `UnmarshalCaddyfile` (`Dispenser` стоит на первом токене директивы, имя модуля модуль пропускает сам). Модуль без `UnmarshalCaddyfile` не принимает аргументов;
-> - директива `max_steps N` в блоке `main` — `Options.MaxSteps`;
 > - `{$ENV}`, `import` и сниппеты `(name) { ... }` разбирает сам парсер;
-> - не реализованы: глобальный блок `{ ... }` (парсер Caddy v1 не принимает блок без адреса), `hooks`, именованные экземпляры (`llm anthropic fast`), сабагенты.
+> - не реализованы: `hooks`, именованные экземпляры (`llm anthropic fast`), директивы-ссылки на экземпляры.
 > - Порядок экземпляров берётся из номеров строк (парсер группирует токены по директивам), поэтому директивы из сниппета встают по месту в сниппете, а не по месту `import`.
 
 Файл конфигурации называется `Agentfile` и пишется в синтаксисе Caddyfile. Парсер — `github.com/caddyserver/caddy/v2/caddyconfig/caddyfile`: лексер, `Dispenser`, `{$ENV}`, `import`, сниппеты, безымянный глобальный блок. Он нужен ради глобального блока и порядка директив, которые парсер Caddy v1 (CoreDNS) терял; цена — большой список зависимостей в `go.mod` (собирается только этот пакет). `{$ENV}` с незаданной переменной даёт пустой токен только в кавычках: `"{$KEY}"`. JSON как внутренний формат в MVP не вводим.
@@ -496,13 +510,13 @@ sequenceDiagram
 
 - Модуль с ID `<namespace>.<name>` настраивается директивой `<namespace> <name> [args] { ... }`. Замена модуля — смена одного слова. Ядро находит модуль и отдаёт ему `Dispenser`; синтаксис плагинов ядро не знает.
 - Глобальный блок `{ ... }` в начале файла — опции ядра и управление хуками.
-- Блоки верхнего уровня — агенты. `main` обязателен, остальные — сабагенты. Сабагенты наследуют `llm` и `policy` от `main`; tools получают только перечисленные. `frontend` и `store` — только в `main`.
-- Директива без блока внутри сабагента (`llm fast`, `tool mcp github`) — ссылка на экземпляр из `main`.
+- Блоки верхнего уровня — агенты. `main` обязателен, остальные — сабагенты; отличаются они только тем, что запускаются не по умолчанию. Каждый блок настраивается целиком: наследования от `main` нет. Агент может вызвать других, только если в его блоке есть `subagents core`.
 - `context`-модули добавляют свои секции в порядке объявления.
 
 ```
 {
     max_steps 50
+    max_depth 2
     hooks {
         order pathnorm.mutate before cedar.authorize
         disable mcp.inject
@@ -534,20 +548,34 @@ main {
     tool mcp github {
         command github-mcp-server stdio
     }
-    tool subagent reviewer researcher
+    subagents core
     context skills ~/.aish/skills ./.aish/skills
     policy cedar ./policies/*.cedar
     store jsonl ~/.aish/sessions
 }
 
 reviewer {
-    llm fast
+    description "Reviews a diff and reports problems"
+    max_depth -1
+    agent loop
+    llm anthropic {
+        model claude-haiku-4-5
+        api_key {$ANTHROPIC_API_KEY}
+    }
     tool fs_read
+    policy ask
 }
 
 researcher {
+    description "Searches the web and the repository"
+    inject off
+    agent loop
+    llm anthropic
     import fs
-    tool mcp github
+    tool mcp github {
+        command github-mcp-server stdio
+    }
+    policy ask
 }
 ```
 
@@ -558,7 +586,7 @@ researcher {
 ### `agent loop`
 - Observe `tx.committed`. Если в транзакции есть `user.message` или `tool.result` и не осталось tool calls без результата, ставит в очередь `llm.request` с provider `default`. Пока запрос ждёт в очереди, второй не ставится. Например, `tool.result` и сообщение, поставленное в очередь во время шага, дадут один общий запрос.
 - `Messages` заполняется из `transcript.Build` в момент начала транзакции (Mutate `llm.request` с приоритетом 3000), а не в момент постановки в очередь. Так в запрос попадает всё, что успело закоммититься до него.
-- Считает шаги с последнего `user.message`. На `max_steps` (поле модуля, затем `Options.MaxSteps`, затем 50) останавливается и порождает `events.LoopStopped{reason}`, которое фронтенд может показать. Отменённую транзакцию и транзакцию с вызовом без результата цикл не продолжает.
+- Считает шаги с последнего `user.message`. На `max_steps` (поле модуля, затем директива `max_steps` блока агента, затем глобального блока, затем 50) останавливается и порождает `events.LoopStopped{reason}`, которое фронтенд может показать. Отменённую транзакцию и транзакцию с вызовом без результата цикл не продолжает.
 - `Emit` из Observe-хука не ждёт выполнения транзакции (§4.3). Поэтому ошибку провайдера цикл видит как `module.error` в следующем `tx.committed`. Повторять ли запрос, решает цикл.
 - В `Start` предупреждает, если на `tool.call` нет ни одного Mutate-хука с приоритетом от 1000 и выше, то есть если политика не подключена (`h.Hooks[ToolCall]()`).
 - Чтобы получить другой цикл (например, planner/executor), достаточно другого модуля с тем же входом (`tx.committed`) и выходом (`llm.request`).
@@ -573,7 +601,7 @@ researcher {
 - Handle `tool.call` с приоритетом 0 печатает `[tool] …` и `[denied] …`.
 - `Done()` закрывается, когда ввод кончился и все строки отправлены; `cmd/aish` ждёт его, затем `Session.Wait` и `Close`. Ctrl+C отменяет транзакцию только при чтении из `os.Stdin`.
 - Первой строкой печатает `session <ID>` (по нему делается `--resume`). Строка, прочитанная, пока идёт транзакция или предыдущее сообщение ещё не закоммичено, помечается `(queued: …)`. Строка, набранная в короткий промежуток между двумя шагами агента, не помечается, хотя тоже ждёт.
-- Handle `loop.stopped` печатает `[stopped] <reason>`.
+- Handle `loop.stopped` печатает `[stopped] <reason>`. Observe `module.error` печатает `[error] <хук>: <текст>` (вложенные ошибки пропускаются).
 
 ### `llm anthropic`
 - Handle `llm.request` с `Where(Provider == имя экземпляра)`. Вызывает API через `anthropic-sdk-go` со стримингом.
@@ -599,7 +627,7 @@ researcher {
 
 ### `tool mcp`
 - Использует `modelcontextprotocol/go-sdk` с транспортами stdio и streamable HTTP. Каждый экземпляр (`tool mcp github`) — это один сервер.
-- Директива: `tool mcp <server> { command <argv>... | url <url> }`, ровно одно из двух. Имя сервера — буквы, цифры и `-` (без `_`, чтобы `mcp__<server>__<tool>` разбиралось однозначно). Экземпляр называется `tool.mcp/<server>`: модуль сообщает имя методом `InstanceName()`, а загрузчик `config` добавляет его к ID.
+- Директива: `tool mcp <server> { command <argv>... | url <url> }`, ровно одно из двух. Имя сервера — буквы, цифры и `-` (без `_`, чтобы `mcp__<server>__<tool>` разбиралось однозначно). Экземпляр называется `tool.mcp/<server>`: модуль сообщает имя методом `InstanceName()`, а загрузчик `config.agentfile` добавляет его к ID.
 - Сервер запускается в `Start` и закрывается в `Stop`. Окружение процесса наследуется (токены передаются через него). Результат вызова — склеенный текст; не текстовое содержимое заменяется пометкой.
 - `Effects.ReadOnly` берётся из `ReadOnlyHint` tool.
 - Tools получают имена `mcp__<server>__<tool>`. Mutate `llm.request` добавляет текущий список, Handle `tool.call` выполняет вызов.
@@ -641,6 +669,10 @@ forbid(principal, action == Action::"fs.write", resource)
 - Аннотация `@decision("ask")` тоже принимается и даёт тот же результат.
 - Файлы с `ask` — это уже диалект. Стандартные инструменты Cedar (CLI, валидатор, плагины редакторов) их не разберут. Команда `aish cedar fmt --standard`, которая выводила бы файл с аннотациями, не реализована.
 
+### `context append`
+- Дописывает в конец системного промпта произвольный текст: `context append [файл...] { text <текст>; path <файл>... }`. Части идут в порядке записи и склеиваются пустой строкой.
+- Mutate `llm.request` с приоритетом 400 (ниже остальных модулей, добавляющих секции) кладёт всё в секцию `append`. Файлы читаются один раз в `Init`, поэтому секция не меняется между запросами и prompt cache стабилен; отсутствующий файл — ошибка запуска. Без текста и файлов `Validate` отказывает.
+
 ### `context skills`
 - Использует формат Agent Skills: директории с `SKILL.md` и frontmatter `name`, `description`.
 - Директива `context skills <dir>...`: каждая директория содержит поддиректории со `SKILL.md`; `~` раскрывается, отсутствующие директории пропускаются, при совпадении имени побеждает более поздняя. Каталог читается один раз в `Init`, поэтому секция не меняется между запросами и prompt cache стабилен. Frontmatter разбирается упрощённо: однострочные значения и блоки `>`/`|`, без вложенного YAML.
@@ -648,7 +680,7 @@ forbid(principal, action == Action::"fs.write", resource)
 - Mutate `llm.request` с приоритетом 500 добавляет секцию `skills` с каталогом и tool `skill(name)`. Handle `tool.call` с `Where(name == "skill")` отдаёт полный текст skill.
 
 ### `store jsonl`
-- Observe `tx.committed`: дописывает каждую транзакцию строкой `{Seq, Status, Events:[{Meta, Kind, Event}]}` в `<dir>/<session>.jsonl` (`dir` по умолчанию `~/.aish/sessions`; `Trace` не пишется). Дочерние сессии (после MVP) пишутся в отдельные файлы со ссылкой на родителя.
+- Observe `tx.committed`: дописывает каждую транзакцию строкой `{Seq, Status, Events:[{Meta, Kind, Event}]}` в `<dir>/<session>.jsonl` (`dir` по умолчанию `~/.aish/sessions`; `Trace` не пишется). Дочерняя сессия, если в её блоке есть `store jsonl`, пишется в отдельный файл со своим ID (`<родитель>.<суффикс>`).
 - В `Init` при `Options.Resume` читает `<resume>.jsonl` и вызывает `h.Seed`. Новые транзакции дописываются в тот же файл, поэтому `cmd/aish` при `--resume` задаёт `SessionConfig.ID = Resume`. Обрезанная последняя строка (процесс упал при записи) игнорируется, события неизвестного `kind` пропускаются с предупреждением. Команда `aish sessions` (список сессий) не реализована.
 
 ### После MVP: `frontend pty`
@@ -668,18 +700,21 @@ forbid(principal, action == Action::"fs.write", resource)
 - **Интерактивные команды.** Alternate screen детектируется, по таймауту возвращается частичный вывод. Для прерывания есть tool `shell_interrupt`.
 - **Вопросы пользователю.** Handle `user.question` рисует вопрос поверх терминала. Handle `assistant.message` показывает поток ответа.
 
-### После MVP: `tool subagent`
+### `subagents core`
 
-В MVP этого модуля нет. Вместе с ним после MVP идут `h.Spawn` и `aish.Bridge` в ядре (§4.8): в MVP они нужны только ему.
+Директива `subagents core` без аргументов: перечень агентов берётся из `Host.Agents()` (все блоки с `inject on`). Настройки агента (`description`, `inject`, `max_depth`) модуль объявляет сам как директивы Agentfile (§7); лимит глубины проверяет он же, ядро его не знает. `aish.Bridge` (§4.8) не реализован.
 
-- Mutate `llm.request` добавляет tool `task(agent, prompt)` с перечнем разрешённых агентов.
-- Handle `tool.call`:
-  1. `h.Spawn(agent, aish.Bridge[UserQuestion]())`;
-  2. `child.Emit(user.message{source: parent})`;
-  3. `child.Wait()`;
-  4. последний `assistant.message` дочерней сессии превращается в `tool.result`.
-- Порождает свои события `subagent.started` и `subagent.finished` с ID дочерней сессии, чтобы фронтенд мог показать вложенность.
-- Глубина вложенности ограничена (проверяется по цепочке родителей в `SessionInfo`).
+- Mutate `llm.request` добавляет tool `task(agent, prompt)` с описаниями агентов. Если `SessionInfo.Depth` достигла `max_depth` агента или показывать некого, tool не добавляется.
+- Mutate `tool.call` с приоритетом 2000 заполняет `Effects`: `subagent.run` на `agent:<имя>` (не read-only), поэтому политика спрашивает разрешение как для любого tool.
+- Handle `tool.call` (`name == "task"`) не ждёт сабагента, транзакция родителя не держится:
+  1. `h.Spawn(ctx, agent)`, событие `subagent.started`;
+  2. сразу `tool.result` «агент запущен, ответ придёт позже в сообщении `<agent_return>`»;
+  3. фоновая горутина на `ctx` из `Start` берёт `h.Hold()`, шлёт `child.Emit(user.message{source: ID родителя})`, ждёт `child.Wait`, берёт текст последнего сообщения ассистента дочерней сессии (`transcript.Build`) и закрывает `child`;
+  4. одним `Emit` с `ctx` из `Start` порождает `subagent.finished` и `events.AgentReturn` в новой транзакции родителя и отпускает `Hold`. `agent loop` отвечает на `agent.return` как на `tool.result`.
+- Пока сабагент работает, родитель свободен: принимает сообщения пользователя и шаги. Ctrl+C (`Host.Cancel`) каскадно отменяет и сабагента; `Close` родителя закрывает его (`Stop` ждёт горутины).
+- Ошибки (агент не виден или не существует, лимит глубины, не удалось запустить) возвращаются модели как `tool.result{is_error}`, ошибки уже запущенного агента (нет ответа) — как `agent.return{is_error}`.
+- События модуля `subagent.started` и `subagent.finished` (CallID, агент, ID дочерней сессии) пишутся в транзакции родителя, чтобы фронтенд мог показать вложенность. `frontend cli` показывает `agent.return` строкой `[agent <имя>] returned`.
+- Вопросы пользователю из сабагента (`user.question`) без моста остаются без ответа, и `policy ask` отказывает.
 
 ## 9. Запуск и сборка
 
@@ -743,7 +778,7 @@ aish-build --with github.com/someone/aish-webchat@v0.2.0 \
 
 **Статус этапа 1.** Готовы: ядро (`Options`, декодеры событий, JSON для `Stream`), `agent loop`, `frontend cli`, `tool fs_read/fs_edit`, `policy ask`, `store jsonl`, `llm anthropic` (проверен только на тестовом HTTP-сервере, живой вызов API не проверялся), `test.FakeLLM`, загрузчик конфига и `cmd/aish`. Готов `aish-build`. Сквозная приёмка с conformance-сценарием (§10) покрыта тестами `TestStage1Conformance` и `TestStage1Resume`. Сверх плана добавлены `tool bash` и `context system_prompt`.
 
-Вне MVP: `frontend pty` и `tool subagent` с `Spawn`/`Bridge` (проекты в §8), параллельное выполнение tool calls одного ответа, компакция, несколько фронтендов одновременно, `frontend webchat`, hot reload конфига, zsh/fish, `llm openai`, JSON-конфиг.
+Вне MVP: `frontend pty` и `aish.Bridge` (проекты в §4.8 и §8), параллельное выполнение tool calls одного ответа, компакция, несколько фронтендов одновременно, `frontend webchat`, hot reload конфига, zsh/fish, `llm openai`, JSON-конфиг.
 
 ## 12. Риски
 
@@ -764,7 +799,7 @@ aish-build --with github.com/someone/aish-webchat@v0.2.0 \
 ## 13. Открытые вопросы
 
 1. Конфиг (§7): управление хуками (приоритет, отключение по имени), пресеты, глобальный блок.
-2. После MVP: можно ли сабагентам иметь свои `policy`, которые сужают (но не расширяют) политику `main`.
+2. Сабагент имеет свои независимые `policy`; нужно ли ограничивать их политикой родителя (сужать, но не расширять), не решено.
 3. Какие ещё методы жизненного цикла нужны, кроме `Validate`/`Start`/`Stop` (логирование закрыто в §4.2).
 4. После MVP: как вложенные вызовы tools (code mode, составные tools) проходят через политику, которая ещё ждёт ответа пользователя на внешнем вызове. Последовательное выполнение (§4.4) не даёт здесь дедлока, но саму семантику пока не проектировали.
 5. Закрыто на этапе 1: декодеры событий (`RegisterEvent`/`DecodeEvent`, §4.3), запись `Stream` как тела (§4.6), пропуск записей без декодера (§8, `store jsonl`).

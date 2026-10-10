@@ -71,7 +71,7 @@ func (s *Skills) Init(_ context.Context, h *aish.Host) error {
 		return err
 	}
 	s.skills = found
-	h.Log().Debug("skills found", "dirs", s.Dirs, "count", len(found))
+	h.Log().Debug("skills found", "dirs", s.Dirs, "count", len(found), "names", skillNames(found))
 	if len(found) == 0 {
 		return nil
 	}
@@ -99,8 +99,13 @@ func (s *Skills) Init(_ context.Context, h *aish.Host) error {
 	}, aish.Priority(effectsPriority), aish.Where(isSkill))
 	h.Handle("load", func(ctx context.Context, c events.ToolCall) error {
 		res := events.ToolResult{CallID: c.ID}
+		h.Log().InfoContext(ctx, "running tool", "tool", c.Name, "call", c.ID)
 		text, err := s.text(c.Input)
-		h.Log().DebugContext(ctx, "skill loaded", "call", c.ID, "bytes", len(text), "err", err)
+		if err != nil {
+			h.Log().WarnContext(ctx, "tool failed", "tool", c.Name, "call", c.ID, "err", err)
+		} else {
+			h.Log().InfoContext(ctx, "tool finished", "tool", c.Name, "call", c.ID, "bytes", len(text))
+		}
 		if err != nil {
 			res.IsError, text = true, err.Error()
 		}
@@ -236,4 +241,13 @@ func frontmatter(text string) (map[string]string, string) {
 	}
 
 	return meta, body
+}
+
+func skillNames(found []skill) []string {
+	names := make([]string, len(found))
+	for i := range found {
+		names[i] = found[i].name
+	}
+
+	return names
 }

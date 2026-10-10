@@ -22,6 +22,9 @@ type ModuleError struct {
 	Instance string
 	Hook     string // empty when the error is not tied to a hook
 	Error    string
+	// Nested marks an error that only passes on the failure of another
+	// hook, which has a module.error of its own in the same transaction.
+	Nested bool
 }
 
 // SessionStarted is journaled when the session starts, after every module
@@ -30,6 +33,7 @@ type SessionStarted struct {
 	ID     string
 	Agent  string // agent block: "main", "reviewer"
 	Parent string // parent session ID of a subagent
+	Depth  int    // 0 for the main agent
 }
 
 func (TxStarted) Kind() string      { return "tx.started" }

@@ -50,3 +50,6 @@ func MetaOf(ctx context.Context) Meta {
 }
 
 const sourceCore = "core"
+
+// sourceExternal is the Source of events emitted through Session.Emit.
+const sourceExternal = "session.emit"

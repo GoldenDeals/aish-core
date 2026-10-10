@@ -3,7 +3,11 @@
 package loop
 
 import (
+	"cmp"
 	"context"
+	"strconv"
+
+	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 
 	aish "github.com/GoldenDeals/aish-core"
 	"github.com/GoldenDeals/aish-core/events"
@@ -24,11 +28,31 @@ const (
 
 func init() {
 	aish.RegisterModule(aish.ModuleInfo{ID: "agent.loop", New: func() aish.Module { return &Loop{} }})
+	aish.RegisterDirective("max_steps", unmarshalMaxSteps)
+}
+
+// Settings are the agent options of the Agentfile directive max_steps.
+type Settings struct {
+	MaxSteps int
+}
+
+func unmarshalMaxSteps(d *caddyfile.Dispenser, v *aish.Values, _ aish.Scope) error {
+	var arg string
+	if !d.Args(&arg) || len(d.RemainingArgs()) > 0 {
+		return d.ArgErr()
+	}
+	steps, err := strconv.Atoi(arg)
+	if err != nil || steps < 1 {
+		return d.Errf("max_steps wants a positive number, got %q", arg)
+	}
+	aish.Set(v, Settings{MaxSteps: steps})
+
+	return nil
 }
 
 type Loop struct {
-	// MaxSteps limits the llm.requests after one user.message. Zero takes
-	// Options.MaxSteps, then 50.
+	// MaxSteps limits the llm.requests after one user.message. Zero takes the
+	// max_steps of the agent block, then of the global block, then 50.
 	MaxSteps int
 
 	h       *aish.Host
@@ -39,7 +63,10 @@ type Loop struct {
 func (l *Loop) Init(_ context.Context, h *aish.Host) error {
 	l.h = h
 	if l.MaxSteps == 0 {
-		l.MaxSteps = h.Options().MaxSteps
+		spec := h.Agent()
+		own, _ := aish.Get[Settings](spec.Own)
+		global, _ := aish.Get[Settings](spec.Global)
+		l.MaxSteps = cmp.Or(own.MaxSteps, global.MaxSteps)
 	}
 	if l.MaxSteps == 0 {
 		l.MaxSteps = defaultMaxSteps
@@ -123,6 +150,8 @@ func continuation(tx aish.Tx) (trigger aish.Meta, fresh, ok bool) {
 		switch e := env.Event.(type) {
 		case events.UserMessage:
 			trigger, fresh, ok = env.Meta, true, true
+		case events.AgentReturn:
+			trigger, ok = env.Meta, true
 		case events.ToolResult:
 			trigger, ok = env.Meta, true
 			results[e.CallID] = true

@@ -272,3 +272,22 @@ func TestBuildSharesNothingWithTheJournal(t *testing.T) {
 		t.Errorf("call input in the journal = %s", in)
 	}
 }
+
+func TestAgentReturnIsAUserMessage(t *testing.T) {
+	t.Parallel()
+
+	msgs := Build([]aish.Tx{
+		tx(1, events.UserMessage{Text: "go"}),
+		tx(2, assistant(text("started")), call("t1"), result("t1", "started")),
+		tx(3, events.AgentReturn{CallID: "t1", Agent: "kid", Text: "done", IsError: true}),
+	})
+
+	last := msgs[len(msgs)-1]
+	if last.Role != events.RoleUser || len(last.Content) == 0 {
+		t.Fatalf("last message = %+v", last)
+	}
+	want := "<agent_return agent=\"kid\" call=\"t1\" error=\"true\">\ndone\n</agent_return>"
+	if got := last.Content[len(last.Content)-1].Text; got != want {
+		t.Errorf("text = %q, want %q", got, want)
+	}
+}

@@ -2,6 +2,8 @@ package aish
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 )
 
@@ -34,4 +36,22 @@ func (h ctxHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 
 func (h ctxHandler) WithGroup(name string) slog.Handler {
 	return ctxHandler{h.inner.WithGroup(name)}
+}
+
+// maxPayloadBytes cuts the event bodies in debug records; the journal and the
+// trace keep everything.
+const maxPayloadBytes = 64 << 10
+
+// PayloadAttr is a log attribute holding v as JSON, cut at maxPayloadBytes. It
+// is for debug records of event bodies; callers check Enabled first.
+func PayloadAttr(key string, v any) slog.Attr {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return slog.String(key, fmt.Sprintf("<cannot encode %T: %v>", v, err))
+	}
+	if len(b) > maxPayloadBytes {
+		return slog.String(key, fmt.Sprintf("%s…(cut, %d more bytes)", b[:maxPayloadBytes], len(b)-maxPayloadBytes))
+	}
+
+	return slog.String(key, string(b))
 }

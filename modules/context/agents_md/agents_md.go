@@ -69,7 +69,7 @@ func (a *AgentsMD) Init(_ context.Context, h *aish.Host) error {
 	if err != nil || text == "" {
 		return err
 	}
-	h.Log().Debug("AGENTS.md sections loaded", "bytes", len(text))
+	h.Log().Debug("AGENTS.md sections loaded", "bytes", len(text), aish.PayloadAttr("text", text))
 	h.Mutate("agents_md", func(_ context.Context, m *aish.Mut[events.LLMRequest]) error {
 		m.Event().Section(SectionName).Text = text
 

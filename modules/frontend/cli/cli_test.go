@@ -211,3 +211,28 @@ func TestLoopStoppedIsShown(t *testing.T) {
 	<-front.Done()
 	s.Wait()
 }
+
+func TestHookFailureIsShown(t *testing.T) {
+	t.Parallel()
+
+	// No scripted reply: the fake provider fails like a provider without credentials.
+	llm := &test.FakeLLM{}
+	pr, pw := io.Pipe()
+	o := &output{}
+	front := &cli.CLI{In: pr, Out: o}
+	s := test.NewSession(t,
+		aish.Instance{Name: "agent.loop", Module: &loop.Loop{}},
+		aish.Instance{Name: "llm.fake", Module: llm},
+		aish.Instance{Name: "frontend.cli", Module: front},
+	)
+
+	if _, err := io.WriteString(pw, "go\n"); err != nil {
+		t.Fatal(err)
+	}
+	o.waitFor(t, "[error] llm.fake:respond: ")
+	if err := pw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	<-front.Done()
+	s.Wait()
+}

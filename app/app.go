@@ -17,11 +17,12 @@ import (
 	"time"
 
 	aish "github.com/GoldenDeals/aish-core"
-	"github.com/GoldenDeals/aish-core/config"
 	logfile "github.com/GoldenDeals/aish-core/modules/log/file"
 )
 
 const (
+	mainAgent     = "main"
+	defaultLoader = "config.agentfile"
 	// termGrace is how long SIGTERM lets the agent finish its step.
 	termGrace = 30 * time.Second
 )
@@ -30,11 +31,15 @@ const (
 func Run() error {
 	configPath := flag.String("config", "Agentfile", "path to the Agentfile")
 	resume := flag.String("resume", "", "ID of the session to continue")
+	loaderID := flag.String("loader", defaultLoader, "config loader module")
 	flag.Parse()
 
 	if flag.Arg(0) == "list-modules" {
 		for _, m := range aish.Modules() {
 			fmt.Println(m.ID)
+		}
+		for _, id := range aish.ConfigLoaders() {
+			fmt.Println(id)
 		}
 
 		return nil
@@ -45,18 +50,26 @@ func Run() error {
 		return fmt.Errorf("aish: %w", err)
 	}
 	defer f.Close()
-	cfg, err := config.Load(*configPath, f)
+	loader, ok := aish.LookupConfigLoader(*loaderID)
+	if !ok {
+		return fmt.Errorf("aish: config loader %q is not linked, have %v", *loaderID, aish.ConfigLoaders())
+	}
+	cfg, err := loader.Load(*configPath, f)
 	if err != nil {
 		return err //nolint:wrapcheck // config errors already carry the "aish: config:" prefix
 	}
-	cfg.Options.Resume = *resume
+	instances, err := cfg.Build(mainAgent)
+	if err != nil {
+		return err //nolint:wrapcheck // config errors already carry the "aish: config:" prefix
+	}
+	instances, logger := logModule(instances)
 
 	// A resumed session keeps its ID so the store continues the same file.
 	id := cmp.Or(*resume, rand.Text())
 	if id != filepath.Base(id) {
 		return fmt.Errorf("aish: invalid session ID %q", id)
 	}
-	log, logFile, err := logModule(cfg).Logger(id)
+	log, logFile, err := logger.Logger(id)
 	if err != nil {
 		return err //nolint:wrapcheck // already prefixed by the log module
 	}
@@ -64,9 +77,11 @@ func Run() error {
 
 	s, err := aish.NewSession(aish.SessionConfig{
 		ID:        id,
-		Agent:     "main",
-		Instances: cfg.Instances,
-		Options:   cfg.Options,
+		Agent:     mainAgent,
+		Instances: instances,
+		Options:   aish.Options{Resume: *resume},
+		Agents:    cfg.Agents,
+		Spawner:   cfg.Build,
 		Log:       log,
 	})
 	if err != nil {
@@ -77,21 +92,20 @@ func Run() error {
 		return listHooks(s)
 	}
 
-	return serve(s, cfg.Instances)
+	return serve(s, instances)
 }
 
 // logModule returns the Agentfile's log module, adding a default one when the
 // file has none.
-func logModule(cfg *config.Config) *logfile.Log {
-	for _, inst := range cfg.Instances {
+func logModule(instances []aish.Instance) ([]aish.Instance, *logfile.Log) {
+	for _, inst := range instances {
 		if l, ok := inst.Module.(*logfile.Log); ok {
-			return l
+			return instances, l
 		}
 	}
 	l := &logfile.Log{}
-	cfg.Instances = append(cfg.Instances, aish.Instance{Name: "log.file", Module: l})
 
-	return l
+	return append(instances, aish.Instance{Name: "log.file", Module: l}), l
 }
 
 func listHooks(s *aish.Session) error {

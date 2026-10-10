@@ -20,6 +20,17 @@ type UserMessage struct {
 	Source string
 }
 
+// AgentReturn is the answer of a subagent that a tool call started and that
+// finished later, in a transaction of its own. The agent loop answers it like
+// a user.message.
+type AgentReturn struct {
+	CallID  string // ToolCall.ID of the call that started the agent
+	Agent   string // agent block that ran
+	Session string // ID of the subagent's session
+	Text    string // the agent's final answer, or the error
+	IsError bool
+}
+
 // UserQuestion asks a human. ID is chosen by the asker and comes back in
 // UserAnswer.QuestionID; an Emit that returns ErrUnhandled means nobody can
 // answer.
@@ -382,6 +393,7 @@ type LoopStopped struct {
 
 func (LoopStopped) Kind() string      { return "loop.stopped" }
 func (UserMessage) Kind() string      { return "user.message" }
+func (AgentReturn) Kind() string      { return "agent.return" }
 func (UserQuestion) Kind() string     { return "user.question" }
 func (UserAnswer) Kind() string       { return "user.answer" }
 func (LLMRequest) Kind() string       { return "llm.request" }
@@ -392,6 +404,7 @@ func (Compacted) Kind() string        { return "compacted" }
 
 func init() {
 	aish.RegisterEvent[UserMessage]()
+	aish.RegisterEvent[AgentReturn]()
 	aish.RegisterEvent[UserQuestion]()
 	aish.RegisterEvent[UserAnswer]()
 	aish.RegisterEvent[LLMRequest]()

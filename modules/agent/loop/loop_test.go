@@ -132,3 +132,17 @@ func TestWarnsWithoutPolicy(t *testing.T) {
 		t.Errorf("warning despite a policy:\n%s", got)
 	}
 }
+
+func TestAgentReturnIsAnswered(t *testing.T) {
+	t.Parallel()
+
+	s, llm := session(t, 0, test.Reply{Text: "got it"})
+	if err := s.Emit(events.AgentReturn{CallID: "c1", Agent: "kid", Text: "result"}); err != nil && !errors.Is(err, aish.ErrUnhandled) {
+		t.Fatal(err)
+	}
+	s.Wait()
+
+	if len(llm.Requests) != 1 {
+		t.Fatalf("requests = %d, want the agent return answered once", len(llm.Requests))
+	}
+}
