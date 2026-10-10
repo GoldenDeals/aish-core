@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/coredns/caddy/caddyfile"
+	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 )
 
 // Module is the only interface every module implements. In Init a module

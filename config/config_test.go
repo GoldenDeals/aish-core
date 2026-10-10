@@ -1,11 +1,13 @@
 package config_test
 
 import (
+	"log/slog"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/GoldenDeals/aish-core/config"
+	"github.com/GoldenDeals/aish-core/modules/log/file"
 	_ "github.com/GoldenDeals/aish-core/modules/standard"
 	"github.com/GoldenDeals/aish-core/modules/store/jsonl"
 	"github.com/GoldenDeals/aish-core/modules/tool/fs"
@@ -91,7 +93,7 @@ func TestExampleLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Options.MaxSteps != 50 || len(cfg.Instances) != 12 {
+	if cfg.Options.MaxSteps != 50 || len(cfg.Instances) != 14 {
 		t.Fatalf("options %+v, %d instances", cfg.Options, len(cfg.Instances))
 	}
 }
@@ -116,5 +118,38 @@ func TestNamedInstances(t *testing.T) {
 	}
 	if got := strings.Join(names, " "); got != "tool.mcp/github tool.mcp/docs" {
 		t.Errorf("instances = %s", got)
+	}
+}
+
+func TestGlobalBlock(t *testing.T) {
+	src := "{\n log file /g.log {\n  level debug\n }\n store jsonl /g\n}\nmain {\n log file /a.log\n}\n"
+	cfg, err := config.Load("Agentfile", strings.NewReader(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(cfg.Instances))
+	for _, i := range cfg.Instances {
+		names = append(names, i.Name)
+	}
+	if got := strings.Join(names, ","); got != "store.jsonl,log.file" {
+		t.Fatalf("instances = %s", got)
+	}
+	if l := cfg.Instances[1].Module.(*file.Log); l.Path != "/a.log" || l.Level != slog.LevelInfo {
+		t.Fatalf("agent log must replace the global one, got %+v", l)
+	}
+}
+
+func TestImportKeepsFileOrder(t *testing.T) {
+	src := "(s) {\n tool fs_read\n}\nmain {\n store jsonl\n import s\n tool bash\n}\n"
+	cfg, err := config.Load("Agentfile", strings.NewReader(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(cfg.Instances))
+	for _, i := range cfg.Instances {
+		names = append(names, i.Name)
+	}
+	if got := strings.Join(names, ","); got != "store.jsonl,tool.fs_read,tool.bash" {
+		t.Fatalf("instances = %s", got)
 	}
 }

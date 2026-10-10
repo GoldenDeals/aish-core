@@ -12,7 +12,6 @@ import (
 type Options struct {
 	MaxSteps int    // agent steps per user message; zero means the module default
 	Resume   string // session ID to restore, empty for a new session
-	Trace    bool
 }
 
 func init() {

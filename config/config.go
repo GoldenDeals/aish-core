@@ -3,14 +3,13 @@
 package config
 
 import (
-	"cmp"
 	"errors"
 	"fmt"
 	"io"
 	"slices"
 	"strconv"
 
-	"github.com/coredns/caddy/caddyfile"
+	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 
 	aish "github.com/GoldenDeals/aish-core"
 )
@@ -28,72 +27,67 @@ type Config struct {
 	Instances []aish.Instance
 }
 
-// Load reads the agent block "main": every directive "<namespace> <name>
+// Load reads the optional leading block "{ ... }" and the agent block "main".
+// Global directives apply to the agent unless it configures the same module
+// itself. Every directive "<namespace> <name>
 // [args] [{ ... }]" creates the module <namespace>.<name> and hands the
 // directive to its UnmarshalCaddyfile. The directive "max_steps N" sets
 // Options.MaxSteps. Subagent blocks are not supported
 // yet; a module names its instance via InstanceName (§7 is under revision).
 func Load(filename string, r io.Reader) (*Config, error) {
-	blocks, err := caddyfile.Parse(filename, r, nil)
+	src, err := io.ReadAll(r)
 	if err != nil {
 		return nil, fmt.Errorf("aish: config: %w", err)
 	}
-	var main *caddyfile.ServerBlock
+	blocks, err := caddyfile.Parse(filename, src)
+	if err != nil {
+		return nil, fmt.Errorf("aish: config: %w", err)
+	}
+	var global, main *caddyfile.ServerBlock
 	for i, b := range blocks {
-		if len(b.Keys) != 1 || b.Keys[0] != mainAgent {
-			return nil, fmt.Errorf("aish: config: agent block %v is not supported, only %q", b.Keys, mainAgent)
+		keys := b.GetKeysText()
+		switch {
+		case len(keys) == 0:
+			global = &blocks[i]
+		case len(keys) == 1 && keys[0] == mainAgent:
+			main = &blocks[i]
+		default:
+			return nil, fmt.Errorf("aish: config: agent block %v is not supported, only %q", keys, mainAgent)
 		}
-		main = &blocks[i]
 	}
 	if main == nil {
 		return nil, fmt.Errorf("aish: config: no %q block", mainAgent)
 	}
 
-	var cfg Config
+	var globalCfg, cfg Config
 	var errs []error
-	for _, st := range statements(main.Tokens) {
-		if err := cfg.add(filename, st); err != nil {
-			errs = append(errs, err)
+	if global != nil {
+		for _, st := range global.Segments {
+			errs = append(errs, globalCfg.add(st))
 		}
+	}
+	for _, st := range main.Segments {
+		errs = append(errs, cfg.add(st))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
 
+	// The agent block overrides a global instance of the same module.
+	for _, g := range slices.Backward(globalCfg.Instances) {
+		if !slices.ContainsFunc(cfg.Instances, func(i aish.Instance) bool { return i.Name == g.Name }) {
+			cfg.Instances = slices.Insert(cfg.Instances, 0, g)
+		}
+	}
+	if globalCfg.Options.MaxSteps > 0 && cfg.Options.MaxSteps == 0 {
+		cfg.Options.MaxSteps = globalCfg.Options.MaxSteps
+	}
+
 	return &cfg, nil
 }
 
-// statements splits the tokens the parser grouped by directive name back
-// into directives and puts them in file order.
-//
-// shortcut: order comes from line numbers, so directives pulled in by a
-// snippet import sort by their place in the snippet; replace the parser if
-// that order starts to matter.
-func statements(byDirective map[string][]caddyfile.Token) [][]caddyfile.Token {
-	var out [][]caddyfile.Token
-	for _, toks := range byDirective {
-		start, depth := 0, 0
-		for i, t := range toks {
-			if i > start && depth == 0 && t.Line != toks[i-1].Line {
-				out = append(out, toks[start:i])
-				start = i
-			}
-			switch t.Text {
-			case "{":
-				depth++
-			case "}":
-				depth--
-			}
-		}
-		out = append(out, toks[start:])
-	}
-	slices.SortStableFunc(out, func(a, b []caddyfile.Token) int { return cmp.Compare(a[0].Line, b[0].Line) })
-
-	return out
-}
-
-func (c *Config) add(filename string, st []caddyfile.Token) error {
-	d := caddyfile.NewDispenserTokens(filename, st)
+func (c *Config) add(st caddyfile.Segment) error {
+	d := caddyfile.NewDispenser(st)
 	d.Next()
 	dir := d.Val()
 
@@ -125,12 +119,12 @@ func (c *Config) add(filename string, st []caddyfile.Token) error {
 
 	// The module reads its own directive; the dispenser stands on its name.
 	if u, ok := m.(aish.CaddyfileUnmarshaler); ok {
-		d = caddyfile.NewDispenserTokens(filename, st)
+		d = caddyfile.NewDispenser(st)
 		d.Next()
-		if err := u.UnmarshalCaddyfile(&d); err != nil {
+		if err := u.UnmarshalCaddyfile(d); err != nil {
 			return fmt.Errorf("aish: config: %s: %w", id, err)
 		}
-	} else if d.NextArg() || d.NextBlock() {
+	} else if d.NextArg() || d.NextBlock(0) {
 		return d.Errf("module %s takes no arguments", id)
 	}
 	// A module that is configured once per server and not once per session

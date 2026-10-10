@@ -1,3 +1,10 @@
+{
+    log file .agents/logs/%D/%T-%s.log {
+        level info
+    }
+    log trace .agents/traces/%D-%s.trace
+}
+
 (files) {
     tool fs_read
     tool fs_edit {
@@ -8,30 +15,35 @@
 main {
     max_steps 50
     agent loop
+
+    log file .agents/logs/%D/%T-%s.log {
+        level debug
+    }
+
     context system_prompt
     context agents_md AGENTS.md {
         home
-        # walk
         local
+        pattern CLAUDE.md
+        #walk
+    }
+    context skills ./.agents/skills ./examples/skills
+    import files
+    tool bash
+
+    tool mcp exa {
+        url https://mcp.exa.ai/mcp?exaApiKey={$EXA_API_KEY}
     }
 
     frontend cli
 
     llm anthropic {
         model claude-haiku-5-5
-        api_key {$ANTHROPIC_API_KEY}
+        api_key "{$ANTHROPIC_API_KEY}"
+        max_tokens 64000
         base_url http://127.0.0.1:8317
     }
 
-    import files
-    tool bash
-
     policy cedar ./examples/policies/allow-all.cedar
-    context skills ./.agents/skills ./examples/skills
-
-    tool mcp exa {
-        url https://mcp.exa.ai/mcp?exaApiKey={$EXA_API_KEY}
-    }
-
     store jsonl .agents/sessions
 }

@@ -10,7 +10,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,12 +18,10 @@ import (
 
 	aish "github.com/GoldenDeals/aish-core"
 	"github.com/GoldenDeals/aish-core/config"
-	"github.com/GoldenDeals/aish-core/trace"
+	logfile "github.com/GoldenDeals/aish-core/modules/log/file"
 )
 
 const (
-	logDirMode  = 0o755
-	logFileMode = 0o600
 	// termGrace is how long SIGTERM lets the agent finish its step.
 	termGrace = 30 * time.Second
 )
@@ -33,7 +30,6 @@ const (
 func Run() error {
 	configPath := flag.String("config", "Agentfile", "path to the Agentfile")
 	resume := flag.String("resume", "", "ID of the session to continue")
-	tracePath := flag.String("trace", "", "append the trace of every transaction to this file as it commits")
 	flag.Parse()
 
 	if flag.Arg(0) == "list-modules" {
@@ -53,19 +49,16 @@ func Run() error {
 	if err != nil {
 		return err //nolint:wrapcheck // config errors already carry the "aish: config:" prefix
 	}
-	cfg.Options.Resume, cfg.Options.Trace = *resume, *tracePath != ""
-	if *tracePath != "" {
-		cfg.Instances = append(cfg.Instances, aish.Instance{Name: "trace.file", Module: &traceFile{path: *tracePath}})
-	}
+	cfg.Options.Resume = *resume
 
 	// A resumed session keeps its ID so the store continues the same file.
 	id := cmp.Or(*resume, rand.Text())
 	if id != filepath.Base(id) {
 		return fmt.Errorf("aish: invalid session ID %q", id)
 	}
-	logFile, err := openLog(id)
+	log, logFile, err := logModule(cfg).Logger(id)
 	if err != nil {
-		return err
+		return err //nolint:wrapcheck // already prefixed by the log module
 	}
 	defer logFile.Close()
 
@@ -74,7 +67,7 @@ func Run() error {
 		Agent:     "main",
 		Instances: cfg.Instances,
 		Options:   cfg.Options,
-		Log:       slog.New(slog.NewTextHandler(logFile, nil)),
+		Log:       log,
 	})
 	if err != nil {
 		return fmt.Errorf("aish: %w", err)
@@ -87,6 +80,20 @@ func Run() error {
 	return serve(s, cfg.Instances)
 }
 
+// logModule returns the Agentfile's log module, adding a default one when the
+// file has none.
+func logModule(cfg *config.Config) *logfile.Log {
+	for _, inst := range cfg.Instances {
+		if l, ok := inst.Module.(*logfile.Log); ok {
+			return l
+		}
+	}
+	l := &logfile.Log{}
+	cfg.Instances = append(cfg.Instances, aish.Instance{Name: "log.file", Module: l})
+
+	return l
+}
+
 func listHooks(s *aish.Session) error {
 	hooks, err := s.Hooks()
 	if err != nil {
@@ -97,25 +104,6 @@ func listHooks(s *aish.Session) error {
 	}
 
 	return nil
-}
-
-// openLog opens ~/.aish/logs/<session>.log: the terminal belongs to the
-// frontend, so logs never go to stdout or stderr.
-func openLog(id string) (*os.File, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("aish: %w", err)
-	}
-	dir := filepath.Join(home, ".aish", "logs")
-	if err := os.MkdirAll(dir, logDirMode); err != nil {
-		return nil, fmt.Errorf("aish: %w", err)
-	}
-	f, err := os.OpenFile(filepath.Join(dir, id+".log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, logFileMode) //nolint:gosec // id is checked to be a plain file name in run
-	if err != nil {
-		return nil, fmt.Errorf("aish: %w", err)
-	}
-
-	return f, nil
 }
 
 // serve runs the session until the frontend's input ends or SIGTERM, then
@@ -145,38 +133,4 @@ func serve(s *aish.Session, instances []aish.Instance) error {
 	defer cancel()
 
 	return errors.Join(s.Wait(drain), s.Close(context.Background()))
-}
-
-// traceFile appends the trace of each transaction to a file right after it
-// commits, so a hung or killed session still leaves its trace.
-type traceFile struct {
-	path string
-	file *os.File
-	h    *aish.Host
-}
-
-func (t *traceFile) Init(_ context.Context, h *aish.Host) error {
-	f, err := os.OpenFile(t.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, logFileMode)
-	if err != nil {
-		return fmt.Errorf("aish: trace: %w", err)
-	}
-	t.file, t.h = f, h
-	h.Observe("write", func(ctx context.Context, c aish.TxCommitted) {
-		if err := trace.Write(t.file, c.Tx); err != nil {
-			t.h.Log().ErrorContext(ctx, "cannot write trace", "err", err)
-		}
-	})
-
-	return nil
-}
-
-func (t *traceFile) Stop(context.Context) error {
-	if t.file == nil {
-		return nil
-	}
-	if err := t.file.Close(); err != nil {
-		return fmt.Errorf("aish: trace: %w", err)
-	}
-
-	return nil
 }

@@ -12,7 +12,7 @@ import (
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
-	"github.com/coredns/caddy/caddyfile"
+	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 
 	aish "github.com/GoldenDeals/aish-core"
 	"github.com/GoldenDeals/aish-core/events"
@@ -45,7 +45,7 @@ func (a *Anthropic) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	if len(d.RemainingArgs()) > 0 {
 		return d.ArgErr()
 	}
-	for d.NextBlock() {
+	for d.NextBlock(0) {
 		var value string
 		opt := d.Val()
 		if !d.Args(&value) {

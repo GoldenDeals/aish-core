@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/coredns/caddy/caddyfile"
+	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	aish "github.com/GoldenDeals/aish-core"
@@ -58,7 +58,7 @@ func (m *MCP) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 		return d.ArgErr()
 	}
 	m.Server = args[0]
-	for d.NextBlock() {
+	for d.NextBlock(0) {
 		switch d.Val() {
 		case "command":
 			if m.Command = d.RemainingArgs(); len(m.Command) == 0 {

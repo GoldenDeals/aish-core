@@ -12,9 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	cedar "github.com/cedar-policy/cedar-go"
 	"github.com/cedar-policy/cedar-go/types"
-	"github.com/coredns/caddy/caddyfile"
 
 	aish "github.com/GoldenDeals/aish-core"
 	"github.com/GoldenDeals/aish-core/events"
@@ -50,7 +50,7 @@ const (
 func (p *Policy) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	d.NextArg() // module name
 	p.Globs = d.RemainingArgs()
-	if d.NextBlock() {
+	if d.NextBlock(0) {
 		return d.Errf("unexpected block")
 	}
 

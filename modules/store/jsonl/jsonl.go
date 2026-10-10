@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/coredns/caddy/caddyfile"
+	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 
 	aish "github.com/GoldenDeals/aish-core"
 )
@@ -59,7 +59,7 @@ func (s *Store) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	default:
 		return d.ArgErr()
 	}
-	if d.NextBlock() {
+	if d.NextBlock(0) {
 		return d.Err("store jsonl takes no block")
 	}
 

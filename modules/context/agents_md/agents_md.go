@@ -11,7 +11,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/coredns/caddy/caddyfile"
+	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 
 	aish "github.com/GoldenDeals/aish-core"
 	"github.com/GoldenDeals/aish-core/events"
@@ -46,7 +46,7 @@ type AgentsMD struct {
 func (a *AgentsMD) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	d.NextArg() // module name
 	a.Patterns = d.RemainingArgs()
-	for d.NextBlock() {
+	for d.NextBlock(0) {
 		switch d.Val() {
 		case "pattern":
 			a.Patterns = append(a.Patterns, d.RemainingArgs()...)

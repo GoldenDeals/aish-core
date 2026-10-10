@@ -13,7 +13,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/coredns/caddy/caddyfile"
+	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 
 	aish "github.com/GoldenDeals/aish-core"
 	"github.com/GoldenDeals/aish-core/events"
@@ -50,7 +50,7 @@ type skill struct {
 func (s *Skills) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	d.NextArg() // module name
 	s.Dirs = d.RemainingArgs()
-	if d.NextBlock() {
+	if d.NextBlock(0) {
 		return d.Errf("unexpected block")
 	}
 

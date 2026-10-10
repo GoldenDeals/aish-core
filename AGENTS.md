@@ -11,7 +11,7 @@ go tool golangci-lint run ./...                          # линт, как в C
 go tool golangci-lint fmt                                # формат: gofumpt + goimports
 go test -race -count=1 ./...                             # тесты, как в CI
 go test -race -count=1 -run '^TestName$' ./path/to/pkg   # один тест
-go run ./cmd/aish --config examples/Agentfile        # запуск (флаги: --resume ID, --trace FILE; подкоманда list-modules)
+go run ./cmd/aish --config examples/Agentfile        # запуск (флаги: --resume ID; подкоманда list-modules)
 ```
 
 CI (`.github/workflows/ci.yml`) сначала запускает линт, потом тесты с `-race`.
@@ -78,5 +78,5 @@ CI (`.github/workflows/ci.yml`) сначала запускает линт, по
 - `LLMRequest.Messages` и `Tx.Trace` в журнал и на диск не пишутся (`json:"-"`).
 
 - Модули пишут логи только через `h.Log()` (`slog`), а не в stdout/stderr: терминал принадлежит фронтенду.
-- Конфиг (`Agentfile`) пишется в синтаксисе Caddyfile и разбирается `github.com/coredns/caddy/caddyfile`, а не Caddy v2. Пример лежит в `examples/Agentfile`. §7 ещё будет пересмотрен.
+- Конфиг (`Agentfile`) пишется в синтаксисе Caddyfile и разбирается `github.com/caddyserver/caddy/v2/caddyconfig/caddyfile`. Безымянный блок `{ ... }` в начале файла — глобальные директивы для всех агентов, блок `main` их переопределяет. Пример лежит в `examples/Agentfile`. §7 ещё будет пересмотрен.
 - Инварианты, которые должны покрывать тесты ядра, перечислены в §10.
