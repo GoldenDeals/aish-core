@@ -575,7 +575,9 @@ researcher {
 ### `llm anthropic`
 - Handle `llm.request` с `Where(Provider == имя экземпляра)`. Вызывает API через `anthropic-sdk-go` со стримингом.
 - При начале ответа порождает `assistant.message` и пишет дельты в поток из своей горутины (§4.6). После конца ответа порождает все `tool.call` одним `Emit`, и они выполняются по очереди (§4.4).
-- Для prompt caching ставит breakpoint-ы на system и tools.
+- Для prompt caching ставит breakpoint-ы на последнюю секцию system и последний tool.
+- Конфиг: `llm anthropic { model <id>; api_key <key>; max_tokens <n>; base_url <url> }`. Без `api_key` SDK берёт `ANTHROPIC_API_KEY` или профиль `ant auth login`. Модель по умолчанию `claude-opus-5-5`, `max_tokens` 64000 (запрос стримится). Экземпляр один, с именем провайдера `default`; `Params.Model`/`MaxTokens` из `llm.request` перекрывают конфиг.
+- Параметр `thinking` не задаётся (модель сама решает), блоки thinking и redacted thinking пишутся в поток и возвращаются в следующий запрос без изменений. Картинки в `Messages` пока отбрасываются. Вызов с невалидным JSON во входе (ответ оборвался по `max_tokens`) отбрасывается с предупреждением в лог. Fallback при `refusal` не включён: причина остановки видна в `DeltaStop`.
 - Fallback на другого провайдера реализуется отдельным модулем: его Mutate-хук на `llm.request` с более высоким приоритетом переписывает `Provider`.
 
 ### `tool fs_read`, `tool fs_edit`
@@ -721,7 +723,7 @@ aish-build --with github.com/someone/aish-webchat@v0.2.0 \
 | **3. Расширение** | `tool mcp`, `context skills` | MCP-сервер подключается одной директивой, и его вызовы проходят через ту же политику; skill из `SKILL.md` попадает в каталог и читается через tool `skill` |
 | **Проверка заменяемости** | conformance-сценарий (§10) с `frontend cli` и с тестовым фронтендом из пакета `test` | остальные модули и конфиг не меняются, тест зелёный в обоих случаях |
 
-**Статус этапа 1.** Готовы: ядро (`Options`, декодеры событий, JSON для `Stream`), `agent loop`, `frontend cli`, `tool fs_read/fs_edit`, `policy ask`, `store jsonl`, `test.FakeLLM`, загрузчик конфига и `cmd/aish`. Не готовы: `llm anthropic`, `aish-build`, сквозная приёмка с conformance-сценарием (§10).
+**Статус этапа 1.** Готовы: ядро (`Options`, декодеры событий, JSON для `Stream`), `agent loop`, `frontend cli`, `tool fs_read/fs_edit`, `policy ask`, `store jsonl`, `llm anthropic` (проверен только на тестовом HTTP-сервере, живой вызов API не проверялся), `test.FakeLLM`, загрузчик конфига и `cmd/aish`. Не готовы: `aish-build`, сквозная приёмка с conformance-сценарием (§10).
 
 Вне MVP: `frontend pty` и `tool subagent` с `Spawn`/`Bridge` (проекты в §8), параллельное выполнение tool calls одного ответа, компакция, несколько фронтендов одновременно, `frontend webchat`, hot reload конфига, zsh/fish, `llm openai`, JSON-конфиг.
 
