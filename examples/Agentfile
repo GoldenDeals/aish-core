@@ -1,35 +1,6 @@
-(system) {
-    max_steps 50    
-    max_depth 2
-    agent loop
-
-    log {
-        file .agents/logs/%D/%T-%s.log level debug rotate 24h
-        trace .agents/traces/%D/%H-%s.trace rotate 1h
-    }
-
-    llm anthropic {
-        api_key "{$ANTHROPIC_API_KEY}"
-        max_tokens 64000
-        base_url http://127.0.0.1:8317
-    }
-
-    context {
-        system_prompt
-        agents_md AGENTS.md home local pattern CLAUDE.md
-        skills ./.agents/skills ./examples/skills
-    }
-
-    subagents core communication
-
-    policy cedar ./examples/policies/allow-all.cedar
-    store jsonl .agents/sessions rotate 24h
-
-    frontend cli
-}
-
 {
-    import system
+    import ./system.Agentfile
+
     llm anthropic model claude-sonnet-5-5
     description "Main general-purpuse agent"
 
@@ -42,17 +13,52 @@
     }
 }
 
-reviewer clean {
+reviewer {
+    import ./system.Agentfile
+
+    context system_prompt examples/prompts/reviewer.md
     description "Reads files and reports problems; never edits"
-    max_depth 1
-    agent loop
-    context system_prompt
-    llm anthropic {
-        model claude-haiku-5-5
-        api_key "{$ANTHROPIC_API_KEY}"
-        base_url http://127.0.0.1:8317
-    }
+    llm anthropic model claude-haiku-5-5
     tool fs_read
-    subagents communication
-    policy cedar ./examples/policies/allow-all.cedar
+}
+
+researcher clean {
+    import ./system.Agentfile
+
+    context system_prompt examples/prompts/researcher.md
+    description "Searches the web and the repository for facts; never edits"
+    max_steps 30
+    llm anthropic model claude-haiku-5-5
+    tool {
+        fs_read
+        mcp exa url https://mcp.exa.ai/mcp?exaApiKey={$EXA_API_KEY}
+    }
+}
+
+coder {
+    import ./system.Agentfile
+
+    context system_prompt examples/prompts/coder.md
+    description "Implements a well-defined change and runs the tests"
+    max_steps 100
+    llm anthropic model claude-opus-5-5 max_tokens 32000
+}
+
+tester clean {
+    import ./system.Agentfile
+
+    context system_prompt examples/prompts/tester.md
+    description "Runs the tests and reports what fails; never edits"
+    max_depth 0
+    tool fs_read bash
+}
+
+summarizer clean {
+    import ./system.Agentfile
+
+    context system_prompt examples/prompts/summarizer.md
+    inject off
+    description "Condenses long text"
+    max_steps 5
+    llm anthropic model claude-haiku-5-5 max_tokens 2000
 }

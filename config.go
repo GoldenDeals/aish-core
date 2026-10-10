@@ -14,6 +14,7 @@ const (
 	// RootAgent is the name of the agent the root of the config describes.
 	RootAgent         = "main"
 	idSeparator       = "."
+	pragmaKeyword     = "pragma"
 	instanceSeparator = "/"
 )
 
@@ -163,6 +164,12 @@ type configFile struct {
 	blocks map[string]*blockDef
 	order  []string
 	ext    *ConfigExt // what the root's modules add; named blocks get it too
+
+	// pragma maps the instances declared with "pragma" to the first section
+	// that declared them. It is written while the file loads and only read
+	// afterwards, because sessions build agents concurrently.
+	pragma    map[string]string
+	recording bool
 }
 
 type blockDef struct {
@@ -177,6 +184,7 @@ type built struct {
 	instances []Instance
 	ids       []string // module ID of each instance
 	extend    []bool   // whether the instance's module still has to extend the config
+	claimed   func(name string) bool
 	ext       *ConfigExt
 }
 
@@ -199,7 +207,9 @@ func LoadConfig(filename string, r io.Reader) (*Config, error) {
 		return nil, fmt.Errorf("aish: config: %w", err)
 	}
 
-	f := &configFile{blocks: map[string]*blockDef{}}
+	f := &configFile{blocks: map[string]*blockDef{}, pragma: map[string]string{}, recording: true}
+	defer func() { f.recording = false }()
+
 	var named []caddyfile.ServerBlock
 	hasRoot := false
 	for _, b := range parsed {
@@ -324,13 +334,28 @@ func (f *configFile) parse(segs []caddyfile.Segment, sec Section, base *built) (
 		b.inherit(base)
 	}
 
+	b.claimed = func(name string) bool {
+		owner, ok := f.pragma[name]
+		if !ok && f.recording {
+			f.pragma[name] = sec.Name
+		}
+
+		return ok && owner != sec.Name
+	}
+
 	var errs []error
 	var pending []caddyfile.Segment
 	for _, st := range expandSegments(segs) {
-		isModule, err := b.addModule(st)
+		pragma := st[0].Text == pragmaKeyword
+		if pragma {
+			st = st[1:]
+		}
+		isModule, err := b.addModule(st, pragma)
 		switch {
 		case err != nil:
 			errs = append(errs, err)
+		case !isModule && pragma:
+			errs = append(errs, fmt.Errorf("aish: config: pragma applies to modules, got %q at %s:%d", st[0].Text, st[0].File, st[0].Line))
 		case !isModule:
 			pending = append(pending, st)
 		}
@@ -390,7 +415,10 @@ func (b *built) add(inst Instance, id string, extend bool) {
 // addModule creates the module of a "<namespace> <name>" directive, or reads
 // the directive into the existing instance. It returns false if the directive
 // is not a linked module.
-func (b *built) addModule(st caddyfile.Segment) (bool, error) {
+func (b *built) addModule(st caddyfile.Segment, pragma bool) (bool, error) {
+	if len(st) == 0 {
+		return false, nil
+	}
 	d := caddyfile.NewDispenser(st)
 	d.Next()
 	dir := d.Val()
@@ -404,6 +432,9 @@ func (b *built) addModule(st caddyfile.Segment) (bool, error) {
 	}
 	m := info.New()
 	_, named := m.(interface{ InstanceName() string })
+	if pragma && !named && b.claimed(id) {
+		return true, nil
+	}
 	existing := slices.IndexFunc(b.instances, func(i Instance) bool { return i.Name == id })
 	if existing >= 0 && !named {
 		m = b.instances[existing].Module
@@ -427,6 +458,9 @@ func (b *built) addModule(st caddyfile.Segment) (bool, error) {
 	name := id
 	if n, ok := m.(interface{ InstanceName() string }); ok && n.InstanceName() != "" {
 		name += instanceSeparator + n.InstanceName()
+	}
+	if pragma && named && b.claimed(name) {
+		return true, nil
 	}
 	if i := slices.IndexFunc(b.instances, func(i Instance) bool { return i.Name == name }); i >= 0 {
 		b.instances[i] = Instance{Name: name, Module: m}
@@ -455,6 +489,13 @@ func (b *built) addModule(st caddyfile.Segment) (bool, error) {
 func expandSegments(segs []caddyfile.Segment) []caddyfile.Segment {
 	var out []caddyfile.Segment
 	for _, st := range segs {
+		if st[0].Text == pragmaKeyword && len(st) > 1 {
+			for _, inner := range expandSegments([]caddyfile.Segment{st[1:]}) {
+				out = append(out, append(caddyfile.Segment{st[0]}, inner...))
+			}
+
+			continue
+		}
 		if len(st) >= 3 && st[1].Text == "{" && st[len(st)-1].Text == "}" {
 			for _, line := range splitLines(st[2 : len(st)-1]) {
 				out = append(out, splitModules(st[0], line)...)

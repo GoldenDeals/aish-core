@@ -121,15 +121,17 @@ func TestLoadErrors(t *testing.T) {
 func TestExampleLoads(t *testing.T) {
 	t.Parallel()
 
-	src, err := os.ReadFile("examples/Agentfile")
+	f, err := os.Open("examples/Agentfile")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := load(t, string(src))
+	defer f.Close()
+
+	cfg, err := aish.LoadConfig("examples/Agentfile", f)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := aish.Get[loop.Settings](cfg.Agents[0].Values); got.MaxSteps != 50 || len(cfg.Agents) != 2 || cfg.Agents[1].Name != "reviewer" {
+	if got, _ := aish.Get[loop.Settings](cfg.Agents[0].Values); got.MaxSteps != 50 || len(cfg.Agents) != 6 || cfg.Agents[1].Name != "reviewer" {
 		t.Fatalf("agents %+v", cfg.Agents)
 	}
 	if got := len(build(t, cfg, "main")); got != 16 {
@@ -435,5 +437,50 @@ helper {
 	}
 	if !ok2 || h.APIKey != "k" || h.Model != "m2" || h.MaxTokens != 5 || h == a {
 		t.Errorf("helper llm = %+v", h)
+	}
+}
+
+func TestPragmaDeclaresAModuleOnce(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := load(t, `(shared) {
+    agent loop
+    pragma frontend cli
+    pragma store jsonl /s
+    pragma tool {
+        mcp exa url http://h
+    }
+    pragma subagents core communication
+}
+{
+    import shared
+}
+reviewer clean {
+    import shared
+    tool fs_read
+}
+helper {
+    import shared
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := names(build(t, cfg, "main")); got != "agent.loop frontend.cli store.jsonl tool.mcp/exa subagents.core subagents.communication" {
+		t.Errorf("main = %s", got)
+	}
+	for _, agent := range []string{"reviewer", "helper"} {
+		// The root declared the pragma modules first, so the agents do not; a
+		// merging one still inherits them, except the frontend and the store.
+		want := "agent.loop tool.fs_read"
+		if agent == "helper" {
+			want = "agent.loop tool.mcp/exa subagents.core subagents.communication"
+		}
+		if got := names(build(t, cfg, agent)); got != want {
+			t.Errorf("%s = %s, want %s", agent, got, want)
+		}
+	}
+	if _, err := load(t, "{\n    pragma max_steps 3\n}\n"); err == nil {
+		t.Error("pragma on a plain directive accepted")
 	}
 }
