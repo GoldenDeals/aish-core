@@ -143,6 +143,7 @@ func (tx *txState) deliver(ev Event, opts EmitOpts, sender *hook, source string,
 		return err
 	}
 	tx.addTrace(TraceEntry{Event: meta.ID, Kind: kind, Hook: source, Action: TraceEmit, Depth: depth})
+	tx.s.log.Debug("event emitted", "tx", tx.seq, "event", meta.ID, "kind", kind, "source", source, "depth", depth)
 
 	var errs []error
 	handled := false
@@ -184,6 +185,7 @@ func (tx *txState) deliver(ev Event, opts EmitOpts, sender *hook, source string,
 		errs = append(errs, err)
 	case !handled && allowedModes(ev) != ModeObserve: // core events have no Mutate or Handle hooks by design
 		tx.addTrace(TraceEntry{Event: meta.ID, Kind: kind, Action: TraceUnhandled, Depth: depth})
+		tx.s.log.Debug("event unhandled", "tx", tx.seq, "event", meta.ID, "kind", kind)
 		errs = append(errs, fmt.Errorf("%w: %s", ErrUnhandled, kind))
 	}
 
@@ -240,6 +242,8 @@ func (tx *txState) runMutate(hk *hook, rec *record, depth int) error {
 		action = TraceChange
 	}
 	tx.finishTrace(entry, action, err, dur)
+	tx.s.log.Debug("hook done", "tx", tx.seq, "hook", hk.info.ID, "mode", ModeMutate, "action", action,
+		"event", rec.env.Meta.ID, "kind", rec.env.Event.Kind(), "dur", dur, "err", err)
 	rec.removed = removed
 	if err != nil {
 		return tx.hookFailed(hk, err)
@@ -256,6 +260,8 @@ func (tx *txState) runHandle(hk *hook, rec *record, ev Event, depth int) error {
 		return hk.handle(ctx, ev)
 	})
 	tx.finishTrace(entry, TraceHandle, err, dur)
+	tx.s.log.Debug("hook done", "tx", tx.seq, "hook", hk.info.ID, "mode", ModeHandle, "action", TraceHandle,
+		"event", rec.env.Meta.ID, "kind", rec.env.Event.Kind(), "dur", dur, "err", err)
 	if err != nil {
 		return tx.hookFailed(hk, err)
 	}
@@ -318,6 +324,7 @@ func (tx *txState) recordUnreturned(source string, err error) {
 
 func (tx *txState) limit(id, kind string, depth int, err error) error {
 	tx.addTrace(TraceEntry{Event: id, Kind: kind, Action: TraceLimit, Depth: depth, Err: err.Error()})
+	tx.s.log.Warn("transaction limit reached", "tx", tx.seq, "event", id, "kind", kind, "err", err)
 	tx.cancel(err)
 
 	return err
@@ -360,6 +367,7 @@ func (tx *txState) awaitStreams() error {
 			err := tx.cancelled()
 			b.abort(err)
 			aborted = true
+			tx.s.log.Debug("stream aborted", "tx", tx.seq, "event", rec.env.Meta.ID, "err", err)
 			tx.addTrace(TraceEntry{
 				Event: rec.env.Meta.ID, Kind: rec.env.Event.Kind(), Action: TraceAbort, Err: err.Error(),
 			})

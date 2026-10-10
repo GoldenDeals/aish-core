@@ -138,6 +138,7 @@ func (s *Session) Start() error {
 
 			return errors.Join(fmt.Errorf("aish: start %s: %w", inst.Name, err), stopErr)
 		}
+		s.s.log.Debug("instance started", "instance", inst.Name)
 	}
 
 	return s.s.emitCore(SessionStarted(s.s.info))
@@ -151,6 +152,7 @@ func (s *Session) initLocked() error {
 
 			return errors.Join(fmt.Errorf("aish: init %s: %w", inst.Name, err), stopErr)
 		}
+		s.s.log.Debug("instance initialized", "instance", inst.Name)
 		s.inited = i + 1
 	}
 
@@ -208,6 +210,7 @@ func (s *Session) closeLocked(ctx context.Context) error {
 		return nil
 	}
 	s.closed = true
+	s.s.log.Debug("session closing")
 	var errs []error
 	if err := s.s.close(ctx); err != nil {
 		errs = append(errs, err)
@@ -224,6 +227,7 @@ func (s *Session) closeLocked(ctx context.Context) error {
 		if err := safeCall(func() error { return st.Stop(ctx) }); err != nil {
 			errs = append(errs, fmt.Errorf("aish: stop %s: %w", inst.Name, err))
 		}
+		s.s.log.Debug("instance stopped", "instance", inst.Name)
 	}
 
 	return errors.Join(errs...)

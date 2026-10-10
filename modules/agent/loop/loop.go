@@ -72,9 +72,13 @@ func (l *Loop) Start(context.Context) error {
 func (l *Loop) onCommitted(ctx context.Context, c aish.TxCommitted) {
 	trigger, fresh, ok := continuation(c.Tx)
 	if !ok {
+		l.h.Log().DebugContext(ctx, "agent has nothing to answer", "tx", c.Tx.Seq, "status", c.Tx.Status)
+
 		return
 	}
 	if l.pending {
+		l.h.Log().DebugContext(ctx, "LLM request already queued", "tx", c.Tx.Seq)
+
 		// The queued request will carry this message too, as the first step
 		// after it.
 		if fresh {
@@ -87,12 +91,14 @@ func (l *Loop) onCommitted(ctx context.Context, c aish.TxCommitted) {
 		l.steps = 0
 	}
 	if l.steps >= l.MaxSteps {
+		l.h.Log().InfoContext(ctx, "agent stopped", "reason", "max_steps", "steps", l.steps)
 		l.emit(ctx, events.LoopStopped{Reason: "max_steps"})
 
 		return
 	}
 	l.steps++
 	l.pending = true
+	l.h.Log().DebugContext(ctx, "requesting the LLM", "step", l.steps, "max_steps", l.MaxSteps, "trigger", trigger.ID, "fresh", fresh)
 	l.emit(ctx, events.LLMRequest{Provider: provider, Trigger: trigger})
 }
 

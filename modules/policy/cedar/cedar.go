@@ -107,6 +107,7 @@ func load(globs []string) (*cedar.PolicySet, error) {
 
 func (p *Policy) authorize(ctx context.Context, m *aish.Mut[events.ToolCall]) error {
 	d, reason, err := p.decide(ctx, *m.Event())
+	p.log.DebugContext(ctx, "cedar decision", "tool", m.Event().Name, "decision", d, "reason", reason, "err", err)
 	switch {
 	case err != nil:
 		// Fail closed.

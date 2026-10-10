@@ -198,7 +198,9 @@ func (m *MCP) refresh(ctx context.Context) error {
 
 func (m *MCP) call(ctx context.Context, c events.ToolCall) error {
 	res := events.ToolResult{CallID: c.ID}
+	m.h.Log().DebugContext(ctx, "calling MCP tool", "server", m.Server, "tool", c.Name, "call", c.ID)
 	text, isErr := m.invoke(ctx, c)
+	m.h.Log().DebugContext(ctx, "MCP tool finished", "server", m.Server, "tool", c.Name, "call", c.ID, "output_bytes", len(text), "is_error", isErr)
 	res.IsError, res.Content = isErr, []events.Block{{Type: events.BlockText, Text: text}}
 	if err := m.h.Emit(ctx, res); err != nil && !errors.Is(err, aish.ErrUnhandled) {
 		return fmt.Errorf("aish: tool.mcp/%s: %w", m.Server, err)

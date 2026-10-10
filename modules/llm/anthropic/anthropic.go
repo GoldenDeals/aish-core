@@ -90,6 +90,8 @@ func (a *Anthropic) Init(_ context.Context, h *aish.Host) error {
 
 func (a *Anthropic) respond(ctx context.Context, r events.LLMRequest) error {
 	params := a.params(r)
+	a.h.Log().DebugContext(ctx, "sending LLM request", "model", params.Model, "messages", len(params.Messages),
+		"tools", len(params.Tools), "max_tokens", params.MaxTokens)
 	content, w := aish.NewStream[events.ContentDelta]()
 	result := make(chan streamResult, 1)
 	// The stream is written from its own goroutine: Emit below returns only
@@ -140,6 +142,8 @@ func (a *Anthropic) stream(ctx context.Context, params sdk.MessageNewParams, w *
 	if err := st.Err(); err != nil {
 		return streamResult{err: fmt.Errorf("stream: %w", err)}
 	}
+	a.h.Log().DebugContext(ctx, "LLM response received", "stop_reason", msg.StopReason,
+		"input_tokens", msg.Usage.InputTokens, "output_tokens", msg.Usage.OutputTokens)
 	w.Write(events.ContentDelta{
 		Type:       events.DeltaStop,
 		StopReason: string(msg.StopReason),

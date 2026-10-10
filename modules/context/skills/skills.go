@@ -71,6 +71,7 @@ func (s *Skills) Init(_ context.Context, h *aish.Host) error {
 		return err
 	}
 	s.skills = found
+	h.Log().Debug("skills found", "dirs", s.Dirs, "count", len(found))
 	if len(found) == 0 {
 		return nil
 	}
@@ -99,6 +100,7 @@ func (s *Skills) Init(_ context.Context, h *aish.Host) error {
 	h.Handle("load", func(ctx context.Context, c events.ToolCall) error {
 		res := events.ToolResult{CallID: c.ID}
 		text, err := s.text(c.Input)
+		h.Log().DebugContext(ctx, "skill loaded", "call", c.ID, "bytes", len(text), "err", err)
 		if err != nil {
 			res.IsError, text = true, err.Error()
 		}

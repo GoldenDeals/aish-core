@@ -145,7 +145,10 @@ func (s *Store) write(ctx context.Context, c aish.TxCommitted) {
 	}
 	if err != nil {
 		s.h.Log().ErrorContext(ctx, "cannot store transaction", "seq", c.Tx.Seq, "err", err)
+
+		return
 	}
+	s.h.Log().DebugContext(ctx, "transaction stored", "seq", c.Tx.Seq, "bytes", len(line))
 }
 
 func encode(tx aish.Tx) ([]byte, error) {
@@ -200,6 +203,7 @@ func (s *Store) restore(name string) error {
 		}
 		txs = append(txs, tx)
 	}
+	s.h.Log().Debug("restored session", "file", name, "transactions", len(txs))
 	if err := s.h.Seed(txs...); err != nil {
 		return fmt.Errorf("aish: store.jsonl: %w", err)
 	}

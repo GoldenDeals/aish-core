@@ -67,7 +67,9 @@ func (b *Bash) Init(_ context.Context, h *aish.Host) error {
 		return nil
 	}, aish.Priority(describePriority), aish.Where(isBash))
 	h.Handle("exec", func(ctx context.Context, c events.ToolCall) error {
+		h.Log().DebugContext(ctx, "running tool", "tool", c.Name, "call", c.ID)
 		out, err := run(ctx, c.Input)
+		h.Log().DebugContext(ctx, "tool finished", "tool", c.Name, "call", c.ID, "output_bytes", len(out), "err", err)
 		res := events.ToolResult{CallID: c.ID, Content: []events.Block{{Type: events.BlockText, Text: out}}, IsError: err != nil}
 		if err != nil {
 			res.Content[0].Text += "\n[" + err.Error() + "]"

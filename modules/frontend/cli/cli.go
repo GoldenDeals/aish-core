@@ -154,6 +154,7 @@ func (c *CLI) send(ctx context.Context, msgs <-chan string) {
 	defer close(c.done)
 	for text := range msgs {
 		if strings.TrimSpace(text) != "" {
+			c.h.Log().DebugContext(ctx, "sending user message", "chars", len(text))
 			err := c.h.Emit(ctx, events.UserMessage{Text: text, Source: source})
 			if err != nil && !errors.Is(err, aish.ErrUnhandled) {
 				c.h.Log().Error("cannot send message", "err", err)

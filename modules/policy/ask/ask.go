@@ -27,6 +27,8 @@ func (p *Policy) Init(_ context.Context, h *aish.Host) error {
 
 func (p *Policy) authorize(ctx context.Context, m *aish.Mut[events.ToolCall]) error {
 	if m.Event().Effects.ReadOnly {
+		p.gate.Log(ctx, "read-only tool call allowed without asking", m.Event().Name)
+
 		return nil
 	}
 

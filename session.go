@@ -371,6 +371,8 @@ func (s *session) warnPossibleDeadlock(instance string) {
 
 func (s *session) runTx(p *pending) {
 	tx := s.beginTx()
+	begin := time.Now()
+	s.log.Debug("transaction started", "tx", tx.seq, "source", p.source, "events", len(p.events))
 	s.observe(TxStarted{Seq: tx.seq, Root: p.events}, Meta{Tx: tx.seq, Time: s.now(), Source: sourceCore})
 
 	errs := make([]error, 0, len(p.events))
@@ -384,6 +386,8 @@ func (s *session) runTx(p *pending) {
 	}
 
 	committed := tx.commit()
+	s.log.Debug("transaction committed", "tx", committed.Seq, "status", committed.Status,
+		"events", len(committed.Events), "trace", len(committed.Trace), "dur", time.Since(begin), "err", err)
 	for _, env := range committed.Events {
 		s.observe(env.Event, env.Meta)
 	}
@@ -423,7 +427,9 @@ func (s *session) observe(ev Event, meta Meta) {
 			ctx, cancel := context.WithCancel(s.ctx)
 			defer cancel()
 			ctx = context.WithValue(ctx, ctxKey{}, &ctxInfo{sess: s, hook: hk, observe: true, meta: meta})
+			start := time.Now()
 			hk.observe(ctx, deepcopy.Copy(ev))
+			s.log.Debug("observe done", "hook", hk.info.ID, "kind", ev.Kind(), "event", meta.ID, "dur", time.Since(start))
 
 			return nil
 		})

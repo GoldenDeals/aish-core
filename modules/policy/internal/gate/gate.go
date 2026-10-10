@@ -28,8 +28,14 @@ func (g *Gate) Init(h *aish.Host) {
 
 // Ask removes the call and asks the user; the answer re-emits or denies it.
 // Call it from the policy's Mutate hook with the hook's ctx.
+// Log records a policy decision made without asking or denying.
+func (g *Gate) Log(ctx context.Context, msg, tool string) {
+	g.h.Log().DebugContext(ctx, msg, "tool", tool)
+}
+
 func (g *Gate) Ask(ctx context.Context, m *aish.Mut[events.ToolCall]) error {
 	m.Remove()
+	g.h.Log().DebugContext(ctx, "asking the user to allow a tool call", "tool", m.Event().Name, "call", m.Event().ID)
 	call := aish.Envelope{Meta: m.Meta(), Event: *m.Event()}
 	g.waiting[call.Meta.ID] = call
 
@@ -65,6 +71,7 @@ func (g *Gate) answer(ctx context.Context, a events.UserAnswer) error {
 		return nil
 	}
 	delete(g.waiting, a.QuestionID)
+	g.h.Log().DebugContext(ctx, "user answered a tool call question", "question", a.QuestionID, "choice", a.Choice)
 	if a.Choice == "yes" {
 		if err := g.h.EmitWith(ctx, aish.Below(Priority), call); err != nil {
 			return fmt.Errorf("aish: policy: %w", err)
@@ -80,6 +87,7 @@ func (g *Gate) answer(ctx context.Context, a events.UserAnswer) error {
 func (g *Gate) deny(ctx context.Context, call aish.Envelope, reason string) error {
 	c, _ := call.Event.(events.ToolCall)
 	c.Denied = true
+	g.h.Log().DebugContext(ctx, "tool call denied", "tool", c.Name, "call", c.ID, "reason", reason)
 	text := []events.Block{{Type: events.BlockText, Text: "Tool call denied: " + reason}}
 
 	return errors.Join(
