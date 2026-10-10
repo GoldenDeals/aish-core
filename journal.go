@@ -39,6 +39,7 @@ const (
 	TraceUnhandled TraceAction = "unhandled" // reached no Mutate or Handle hook
 	TraceCancelled TraceAction = "cancelled" // recorded without delivery: the transaction is cancelled
 	TraceLimit     TraceAction = "limit"     // transaction cancelled by a limit
+	TraceAbort     TraceAction = "abort"     // open stream closed with the cancellation error
 	TraceWarn      TraceAction = "warn"      // suspected misuse, see Err
 )
 

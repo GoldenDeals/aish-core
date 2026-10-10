@@ -40,7 +40,7 @@ func (m Mode) String() string {
 }
 
 // modeRestricted is implemented by core event types that support only some
-// modes. Stream events will use it to forbid Mutate.
+// modes, and through an embedded Stream by stream events, which forbid Mutate.
 type modeRestricted interface {
 	allowedModes() Mode
 }

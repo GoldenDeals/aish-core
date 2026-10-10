@@ -318,6 +318,41 @@ func (tx *txState) cancelled() error {
 	return fmt.Errorf("%w: %w", errCancelled, context.Cause(tx.ctx))
 }
 
+// awaitStreams blocks until every stream of the journaled events is closed.
+// If the transaction is cancelled first, it closes the open streams with the
+// cancellation error and returns that error.
+func (tx *txState) awaitStreams() error {
+	var aborted bool
+	for _, rec := range tx.records {
+		if rec.removed {
+			continue
+		}
+		for _, b := range streamsIn(rec.env.Event) {
+			select {
+			case <-b.finished():
+				continue
+			case <-tx.ctx.Done():
+			}
+			select {
+			case <-b.finished():
+				continue
+			default:
+			}
+			err := tx.cancelled()
+			b.abort(err)
+			aborted = true
+			tx.addTrace(TraceEntry{
+				Event: rec.env.Meta.ID, Kind: rec.env.Event.Kind(), Action: TraceAbort, Err: err.Error(),
+			})
+		}
+	}
+	if aborted {
+		return tx.cancelled()
+	}
+
+	return nil
+}
+
 func (tx *txState) commit() Tx {
 	status := StatusCommitted
 	if tx.ctx.Err() != nil {

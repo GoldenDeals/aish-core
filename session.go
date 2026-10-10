@@ -257,6 +257,7 @@ func (s *session) runTx(p *pending) {
 	for _, ev := range p.events {
 		errs = append(errs, tx.deliver(ev, p.opts, p.sender, p.source, 1))
 	}
+	errs = append(errs, tx.awaitStreams())
 	err := errors.Join(errs...)
 	if p.done == nil {
 		tx.recordUnreturned(p.source, err)
