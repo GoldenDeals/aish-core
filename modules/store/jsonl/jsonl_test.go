@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	aish "github.com/GoldenDeals/aish-core"
 	"github.com/GoldenDeals/aish-core/events"
@@ -140,5 +141,38 @@ func TestResumeCutsTruncatedTail(t *testing.T) {
 	s3.Wait()
 	if got := s3.Journal().Len(); got != 3 {
 		t.Fatalf("journal has %d transactions, want 3 session.started", got)
+	}
+}
+
+func TestRotatedSegmentsResume(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := func(resume string) *test.Session {
+		return test.NewSessionWith(t, aish.SessionConfig{
+			ID:        "sess",
+			Options:   aish.Options{Resume: resume},
+			Instances: []aish.Instance{{Name: "store.jsonl", Module: &jsonl.Store{Dir: dir, Rotate: time.Millisecond}}},
+		})
+	}
+	s1 := cfg("")
+	for range 2 {
+		time.Sleep(1100 * time.Millisecond) // segment names carry whole seconds
+		_ = s1.Emit(events.UserMessage{Text: "hi"})
+	}
+	s1.Wait()
+	if err := s1.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	segments, _ := filepath.Glob(filepath.Join(dir, "sess*.jsonl"))
+	if len(segments) < 2 {
+		t.Fatalf("want rotated segments, got %v", segments)
+	}
+
+	want := len(s1.Journal().Txs())
+	s2 := cfg("sess")
+	s2.Wait()
+	if got := len(s2.Journal().Txs()); got != want+1 {
+		t.Fatalf("resumed %d txs, want %d + session.started", got, want)
 	}
 }

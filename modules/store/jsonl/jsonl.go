@@ -3,18 +3,23 @@
 package jsonl
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 
 	aish "github.com/GoldenDeals/aish-core"
+	"github.com/GoldenDeals/aish-core/internal/rotate"
 )
 
 const (
@@ -30,9 +35,14 @@ type Store struct {
 	// Dir holds the session files; ~/.aish/sessions when empty.
 	Dir string
 
+	// Rotate starts a new segment file <session>.<unix time>.jsonl once this
+	// much time has passed since the current one was opened; resume reads all
+	// segments in order. Zero keeps one file per session.
+	Rotate time.Duration
+
 	h    *aish.Host
 	root *os.Root
-	file *os.File
+	file *rotate.Writer
 }
 
 // record is one line of the file. Trace is not stored: it is for the live
@@ -49,7 +59,7 @@ type eventRecord struct {
 	Event json.RawMessage
 }
 
-// UnmarshalCaddyfile reads "store jsonl [dir]".
+// UnmarshalCaddyfile reads "store jsonl [dir] { rotate <duration> }".
 func (s *Store) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	d.NextArg() // module name
 	switch args := d.RemainingArgs(); len(args) {
@@ -59,8 +69,15 @@ func (s *Store) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	default:
 		return d.ArgErr()
 	}
-	if d.NextBlock(0) {
-		return d.Err("store jsonl takes no block")
+	for d.NextBlock(0) {
+		if d.Val() != "rotate" {
+			return d.Errf("unknown store jsonl option %q", d.Val())
+		}
+		p, err := rotate.Period(d)
+		if err != nil {
+			return err //nolint:wrapcheck // carries the Agentfile position
+		}
+		s.Rotate = p
 	}
 
 	return nil
@@ -79,7 +96,6 @@ func (s *Store) Init(_ context.Context, h *aish.Host) error {
 	if id != filepath.Base(id) {
 		return fmt.Errorf("aish: store.jsonl: invalid session ID %q", id)
 	}
-	name := id + ".jsonl"
 
 	if err := os.MkdirAll(s.Dir, dirMode); err != nil {
 		return fmt.Errorf("aish: store.jsonl: %w", err)
@@ -90,19 +106,64 @@ func (s *Store) Init(_ context.Context, h *aish.Host) error {
 	}
 	s.root = root
 
+	current := id + ".jsonl"
 	if h.Options().Resume != "" {
-		if err := s.restore(name); err != nil {
+		names, err := s.segments(id)
+		if err != nil {
 			return err
 		}
+		if err := s.restore(names); err != nil {
+			return err
+		}
+		current = names[len(names)-1]
 	}
-	f, err := root.OpenFile(name, os.O_APPEND|os.O_CREATE|os.O_WRONLY, fileMode)
+	first := true
+	s.file, err = rotate.Open(&rotate.Writer{
+		Period: s.Rotate,
+		Name: func(now time.Time) string {
+			if first {
+				first = false
+
+				return current
+			}
+
+			return fmt.Sprintf("%s.%d.jsonl", id, now.Unix())
+		},
+		Create: func(name string) (io.WriteCloser, error) {
+			return root.OpenFile(name, os.O_APPEND|os.O_CREATE|os.O_WRONLY, fileMode)
+		},
+	})
 	if err != nil {
 		return fmt.Errorf("aish: store.jsonl: %w", err)
 	}
-	s.file = f
 	h.Observe("write", s.write)
 
 	return nil
+}
+
+// segments lists the files of a session in write order: <id>.jsonl, then
+// <id>.<unix time>.jsonl by time.
+func (s *Store) segments(id string) ([]string, error) {
+	entries, err := fs.ReadDir(s.root.FS(), ".")
+	if err != nil {
+		return nil, fmt.Errorf("aish: store.jsonl: resume: %w", err)
+	}
+	var names []string
+	for _, e := range entries {
+		stamp, ok := strings.CutPrefix(e.Name(), id+".")
+		stamp, ok2 := strings.CutSuffix(stamp, ".jsonl")
+		if e.Name() == id+".jsonl" || (ok && ok2 && stamp != "" && strings.Trim(stamp, "0123456789") == "") {
+			names = append(names, e.Name())
+		}
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("aish: store.jsonl: resume: no file for session %q in %s: %w", id, s.Dir, fs.ErrNotExist)
+	}
+	slices.SortFunc(names, func(a, b string) int {
+		return cmp.Or(cmp.Compare(len(a), len(b)), cmp.Compare(a, b))
+	})
+
+	return names, nil
 }
 
 // resolveDir fills in the default directory and expands a leading "~".
@@ -168,13 +229,30 @@ func encode(tx aish.Tx) ([]byte, error) {
 	return append(line, '\n'), nil
 }
 
-// restore seeds the journal from the file name in Dir. A truncated last line
-// (the process died while writing) ends the file; events of unknown kind are
-// skipped.
-func (s *Store) restore(name string) error {
+// restore seeds the journal from the files in Dir, oldest first. A truncated
+// last line of the newest file (the process died while writing) ends it;
+// events of unknown kind are skipped.
+func (s *Store) restore(names []string) error {
+	var txs []aish.Tx
+	for i, name := range names {
+		read, err := s.readFile(name, i == len(names)-1)
+		if err != nil {
+			return err
+		}
+		txs = append(txs, read...)
+	}
+	s.h.Log().Debug("restored session", "files", names, "transactions", len(txs))
+	if err := s.h.Seed(txs...); err != nil {
+		return fmt.Errorf("aish: store.jsonl: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Store) readFile(name string, newest bool) ([]aish.Tx, error) {
 	f, err := s.root.Open(name)
 	if err != nil {
-		return fmt.Errorf("aish: store.jsonl: resume: %w", err)
+		return nil, fmt.Errorf("aish: store.jsonl: resume: %w", err)
 	}
 	defer f.Close()
 
@@ -186,29 +264,25 @@ func (s *Store) restore(name string) error {
 		if errors.Is(err, io.EOF) {
 			break
 		}
-		if errors.Is(err, io.ErrUnexpectedEOF) {
+		if errors.Is(err, io.ErrUnexpectedEOF) && newest {
 			s.h.Log().Warn("dropping truncated last record", "file", name)
 			if err := s.cutTail(name, dec.InputOffset()); err != nil {
-				return err
+				return nil, err
 			}
 
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("aish: store.jsonl: read %s: %w", name, err)
+			return nil, fmt.Errorf("aish: store.jsonl: read %s: %w", name, err)
 		}
 		tx, err := s.decode(rec)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		txs = append(txs, tx)
 	}
-	s.h.Log().Debug("restored session", "file", name, "transactions", len(txs))
-	if err := s.h.Seed(txs...); err != nil {
-		return fmt.Errorf("aish: store.jsonl: %w", err)
-	}
 
-	return nil
+	return txs, nil
 }
 
 // cutTail removes everything after the last whole record (the process died

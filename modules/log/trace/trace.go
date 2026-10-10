@@ -1,25 +1,23 @@
-// Package trace is the log.trace module: it appends the trace of every
-// committed transaction to a file right after the commit, so a hung or killed
-// session still leaves its trace.
+// Package trace is the log.trace module (§2, principle 8): it appends the
+// trace of every committed transaction to a file right after the commit, so a
+// hung or killed session still leaves its trace. The trace shows who got,
+// changed, removed and emitted which events.
 package trace
 
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 
 	aish "github.com/GoldenDeals/aish-core"
+	"github.com/GoldenDeals/aish-core/internal/rotate"
 	"github.com/GoldenDeals/aish-core/modules/log/internal/pathfmt"
-	"github.com/GoldenDeals/aish-core/trace"
-)
-
-const (
-	dirMode  = 0o755
-	fileMode = 0o600
 )
 
 func init() {
@@ -30,10 +28,14 @@ type Trace struct {
 	// Path is the trace file, with pathfmt placeholders; ~/.aish/traces/%s.trace when empty.
 	Path string
 
-	file *os.File
+	// Rotate starts a new file once this much time has passed, when the path
+	// has time placeholders; zero never rotates.
+	Rotate time.Duration
+
+	file io.Closer
 }
 
-// UnmarshalCaddyfile reads "log trace [path]".
+// UnmarshalCaddyfile reads "log trace [path] { rotate <duration> }".
 func (t *Trace) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	d.NextArg() // module name
 	switch args := d.RemainingArgs(); len(args) {
@@ -43,8 +45,15 @@ func (t *Trace) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	default:
 		return d.ArgErr()
 	}
-	if d.NextBlock(0) {
-		return d.Err("log trace takes no block")
+	for d.NextBlock(0) {
+		if d.Val() != "rotate" {
+			return d.Errf("unknown log trace option %q", d.Val())
+		}
+		p, err := rotate.Period(d)
+		if err != nil {
+			return err //nolint:wrapcheck // carries the Agentfile position
+		}
+		t.Rotate = p
 	}
 
 	return nil
@@ -59,17 +68,18 @@ func (t *Trace) Init(_ context.Context, h *aish.Host) error {
 		}
 		path = filepath.Join(home, ".aish", "traces", "%s.trace")
 	}
-	path = pathfmt.Format(path, h.Session().ID, time.Now())
-	if err := os.MkdirAll(filepath.Dir(path), dirMode); err != nil {
-		return fmt.Errorf("aish: log.trace: %w", err)
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, fileMode) //nolint:gosec // path comes from the Agentfile or the checked session ID
+	session := h.Session().ID
+	w, err := rotate.Open(&rotate.Writer{
+		Period: t.Rotate,
+		Name:   func(now time.Time) string { return pathfmt.Format(path, session, now) },
+		Create: rotate.CreateFile,
+	})
 	if err != nil {
 		return fmt.Errorf("aish: log.trace: %w", err)
 	}
-	t.file = f
+	t.file = w
 	h.Observe("write", func(ctx context.Context, c aish.TxCommitted) {
-		if err := trace.Write(f, c.Tx); err != nil {
+		if err := Write(w, c.Tx); err != nil {
 			h.Log().ErrorContext(ctx, "cannot write trace", "err", err)
 		}
 	})
@@ -83,6 +93,48 @@ func (t *Trace) Stop(context.Context) error {
 	}
 	if err := t.file.Close(); err != nil {
 		return fmt.Errorf("aish: log.trace: %w", err)
+	}
+
+	return nil
+}
+
+// Write prints tx as a tree: every step is indented by its Emit depth, so
+// the events a hook emitted sit under the hook. Zero durations are left out,
+// which keeps the output of a trace with Dur cleared stable for golden files.
+//
+//	tx 2 committed
+//	  emit      2.1 tool.call llm.fake
+//	  remove    2.1 tool.call policy.ask:authorize (40µs)
+//	    emit      2.2 user.question policy.ask:authorize
+//	events: 2.2 user.question
+func Write(w io.Writer, tx aish.Tx) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "tx %d %s\n", tx.Seq, tx.Status)
+	for _, e := range tx.Trace {
+		b.WriteString(strings.Repeat("  ", max(e.Depth, 1)))
+		fmt.Fprintf(&b, "%-9s", e.Action)
+		for _, field := range []string{e.Event, e.Kind, e.Hook} {
+			if field != "" {
+				b.WriteString(" " + field)
+			}
+		}
+		if e.Dur > 0 {
+			fmt.Fprintf(&b, " (%s)", e.Dur)
+		}
+		if e.Err != "" {
+			b.WriteString(": " + e.Err)
+		}
+		b.WriteByte('\n')
+	}
+
+	events := make([]string, len(tx.Events))
+	for i, env := range tx.Events {
+		events[i] = env.Meta.ID + " " + env.Event.Kind()
+	}
+	fmt.Fprintf(&b, "events: %s\n", strings.Join(events, ", "))
+
+	if _, err := io.WriteString(w, b.String()); err != nil {
+		return fmt.Errorf("aish: log.trace: write: %w", err)
 	}
 
 	return nil

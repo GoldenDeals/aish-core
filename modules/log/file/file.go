@@ -13,12 +13,8 @@ import (
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 
 	aish "github.com/GoldenDeals/aish-core"
+	"github.com/GoldenDeals/aish-core/internal/rotate"
 	"github.com/GoldenDeals/aish-core/modules/log/internal/pathfmt"
-)
-
-const (
-	dirMode  = 0o755
-	fileMode = 0o600
 )
 
 func init() {
@@ -29,9 +25,12 @@ type Log struct {
 	// Path is the log file, with pathfmt placeholders; ~/.aish/logs/%s.log when empty.
 	Path  string
 	Level slog.Level
+	// Rotate starts a new file once this much time has passed, when the path
+	// has time placeholders; zero never rotates.
+	Rotate time.Duration
 }
 
-// UnmarshalCaddyfile reads "log file [path] { level <level> }".
+// UnmarshalCaddyfile reads "log file [path] { level <level>; rotate <duration> }".
 func (l *Log) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	d.NextArg() // module name
 	switch args := d.RemainingArgs(); len(args) {
@@ -51,6 +50,12 @@ func (l *Log) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			if err := l.Level.UnmarshalText([]byte(s)); err != nil {
 				return d.Errf("log level: %v", err)
 			}
+		case "rotate":
+			p, err := rotate.Period(d)
+			if err != nil {
+				return err //nolint:wrapcheck // carries the Agentfile position
+			}
+			l.Rotate = p
 		default:
 			return d.Errf("unknown log option %q", d.Val())
 		}
@@ -72,16 +77,16 @@ func (l *Log) Logger(session string) (*slog.Logger, io.Closer, error) {
 		}
 		path = filepath.Join(home, ".aish", "logs", "%s.log")
 	}
-	path = pathfmt.Format(path, session, time.Now())
-	if err := os.MkdirAll(filepath.Dir(path), dirMode); err != nil {
-		return nil, nil, fmt.Errorf("aish: log.file: %w", err)
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, fileMode) //nolint:gosec // path comes from the Agentfile or the checked session ID
+	w, err := rotate.Open(&rotate.Writer{
+		Period: l.Rotate,
+		Name:   func(now time.Time) string { return pathfmt.Format(path, session, now) },
+		Create: rotate.CreateFile,
+	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("aish: log.file: %w", err)
 	}
 
-	return slog.New(slog.NewTextHandler(f, &slog.HandlerOptions{Level: l.Level})), f, nil
+	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: l.Level})), w, nil
 }
 
 // Init does nothing: the logger exists before the session does.

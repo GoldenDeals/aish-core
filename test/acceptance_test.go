@@ -12,9 +12,9 @@ import (
 
 	aish "github.com/GoldenDeals/aish-core"
 	"github.com/GoldenDeals/aish-core/events"
+	"github.com/GoldenDeals/aish-core/modules/log/trace"
 	"github.com/GoldenDeals/aish-core/modules/policy/ask"
 	"github.com/GoldenDeals/aish-core/test"
-	"github.com/GoldenDeals/aish-core/trace"
 	"github.com/GoldenDeals/aish-core/transcript"
 )
 

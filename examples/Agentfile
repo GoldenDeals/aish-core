@@ -1,8 +1,12 @@
 {
-    log file .agents/logs/%D/%T-%s.log {
+    log file .agents/logs/%D/%H-%s.log {
         level info
+        # Reopen the path (with %H, %D... evaluated again) after this long.
+        rotate 24h
     }
-    log trace .agents/traces/%D-%s.trace
+    log trace .agents/traces/%D/%H-%s.trace {
+        rotate 1h
+    }
 }
 
 (files) {
@@ -45,5 +49,8 @@ main {
     }
 
     policy cedar ./examples/policies/allow-all.cedar
-    store jsonl .agents/sessions
+    store jsonl .agents/sessions {
+        # New segment <session>.<unix time>.jsonl after this long; resume reads all.
+        rotate 24h
+    }
 }
