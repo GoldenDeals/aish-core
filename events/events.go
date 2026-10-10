@@ -274,6 +274,13 @@ type Compacted struct {
 	Summary string
 }
 
+// LoopStopped is emitted by an agent loop that gave up continuing, so
+// frontends can tell the user why the agent went quiet.
+type LoopStopped struct {
+	Reason string // "max_steps"
+}
+
+func (LoopStopped) Kind() string      { return "loop.stopped" }
 func (UserMessage) Kind() string      { return "user.message" }
 func (UserQuestion) Kind() string     { return "user.question" }
 func (UserAnswer) Kind() string       { return "user.answer" }
@@ -292,4 +299,5 @@ func init() {
 	aish.RegisterEvent[ToolCall]()
 	aish.RegisterEvent[ToolResult]()
 	aish.RegisterEvent[Compacted]()
+	aish.RegisterEvent[LoopStopped]()
 }
