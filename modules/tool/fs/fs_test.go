@@ -159,3 +159,20 @@ func read(t *testing.T, path string) string {
 
 	return string(b)
 }
+
+func TestReadHugeLimitAndLargeFile(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	write(t, filepath.Join(root, "a.txt"), "one\ntwo\nthree\n")
+	write(t, filepath.Join(root, "big.txt"), strings.Repeat("x", 1<<20+10))
+
+	_, res := run(t, root, "fs_read", `{"path":"a.txt","offset":2,"limit":9223372036854775807}`)
+	if res.IsError || !strings.HasPrefix(res.Content[0].Text, "two\nthree\n") {
+		t.Errorf("huge limit: %+v", res)
+	}
+	_, res = run(t, root, "fs_read", `{"path":"big.txt"}`)
+	if !res.IsError || !strings.Contains(res.Content[0].Text, "limit") {
+		t.Errorf("large file: %+v", res.Content[0].Text[:min(80, len(res.Content[0].Text))])
+	}
+}

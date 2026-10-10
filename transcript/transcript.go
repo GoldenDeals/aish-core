@@ -87,6 +87,14 @@ func (b *builder) tx(tx aish.Tx) {
 		}
 	}
 
+	calls := map[string]events.ToolCall{}
+	for _, env := range tx.Events {
+		if c, ok := env.Event.(events.ToolCall); ok {
+			calls[c.ID] = c
+		}
+	}
+	placed := map[string]bool{} // calls already in the message at their stream position
+
 	var pending []events.ToolCall // calls of the last assistant message
 	flush := func() {
 		for _, c := range pending {
@@ -102,14 +110,38 @@ func (b *builder) tx(tx aish.Tx) {
 			b.add(events.RoleUser, userBlocks(ev)...)
 		case events.AssistantMessage:
 			flush()
-			b.add(events.RoleAssistant, ev.Blocks()...)
+			b.add(events.RoleAssistant, placeCalls(ev.Blocks(), calls, placed)...)
 		case events.ToolCall:
-			b.add(events.RoleAssistant, events.Block{Type: events.BlockToolUse, ID: ev.ID, Name: ev.Name, Input: ev.Input})
+			if !placed[ev.ID] {
+				b.add(events.RoleAssistant, events.Block{Type: events.BlockToolUse, ID: ev.ID, Name: ev.Name, Input: ev.Input})
+			}
 			pending = append(pending, ev)
 		default:
 		}
 	}
 	flush()
+}
+
+// placeCalls fills in the tool_use blocks the stream marked with their calls
+// and drops a marker whose call is gone (the provider discarded it). Calls
+// without a marker, from providers that do not write one, are added after the
+// message by the caller.
+func placeCalls(blocks []events.Block, calls map[string]events.ToolCall, placed map[string]bool) []events.Block {
+	out := blocks[:0:0]
+	for i := range blocks {
+		b := blocks[i]
+		if b.Type == events.BlockToolUse {
+			c, ok := calls[b.ID]
+			if !ok {
+				continue
+			}
+			b.Name, b.Input = c.Name, c.Input
+			placed[c.ID] = true
+		}
+		out = append(out, b)
+	}
+
+	return out
 }
 
 func userBlocks(m events.UserMessage) []events.Block {

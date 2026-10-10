@@ -224,11 +224,7 @@ func (c *CLI) ask(ctx context.Context, q events.UserQuestion) error {
 	}
 	c.answer = answer
 	c.mu.Unlock()
-	defer func() {
-		c.mu.Lock()
-		c.answer = nil
-		c.mu.Unlock()
-	}()
+	defer c.clearAnswer()
 
 	for {
 		c.printf("%s [%s] ", q.Text, strings.Join(q.Options, "/"))
@@ -249,7 +245,16 @@ func (c *CLI) ask(ctx context.Context, q events.UserQuestion) error {
 	}
 }
 
+func (c *CLI) clearAnswer() {
+	c.mu.Lock()
+	c.answer = nil
+	c.mu.Unlock()
+}
+
+// reply sends the answer. The answer channel is cleared first: the emit may
+// run a slow tool, and a line typed meanwhile is a new message, not an answer.
 func (c *CLI) reply(ctx context.Context, a events.UserAnswer) error {
+	c.clearAnswer()
 	c.printf("\n")
 	if err := c.h.Emit(ctx, a); err != nil {
 		return fmt.Errorf("aish: frontend.cli: %w", err)

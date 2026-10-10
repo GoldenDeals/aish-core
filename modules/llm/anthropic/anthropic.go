@@ -157,8 +157,16 @@ func (a *Anthropic) stream(ctx context.Context, params sdk.MessageNewParams, w *
 func writeDelta(w *aish.StreamWriter[events.ContentDelta], ev sdk.MessageStreamEventUnion) {
 	switch e := ev.AsAny().(type) {
 	case sdk.ContentBlockStartEvent:
-		if e.ContentBlock.Type == "redacted_thinking" {
+		switch e.ContentBlock.Type {
+		case "redacted_thinking":
 			w.Write(events.ContentDelta{Type: events.DeltaRedactedThinking, Data: []byte(e.ContentBlock.Data)})
+		case "thinking":
+			// With omitted display no thinking_delta follows, only the
+			// signature: open the block so the signature has one to close.
+			w.Write(events.ContentDelta{Type: events.DeltaThinking})
+		case "tool_use":
+			w.Write(events.ContentDelta{Type: events.DeltaToolUse, ToolID: e.ContentBlock.ID})
+		default:
 		}
 	case sdk.ContentBlockDeltaEvent:
 		switch d := e.Delta.AsAny().(type) {

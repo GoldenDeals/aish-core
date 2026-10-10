@@ -27,11 +27,11 @@ func (c *counter) Init(_ context.Context, h *aish.Host) error {
 	return nil
 }
 
-func start(t *testing.T, dir, id, resume string, c *counter) *test.Session {
+func start(t *testing.T, dir, resume string, c *counter) *test.Session {
 	t.Helper()
 
 	return test.NewSessionWith(t, aish.SessionConfig{
-		ID:      id,
+		ID:      "sess",
 		Options: aish.Options{Resume: resume},
 		Instances: []aish.Instance{
 			{Name: "store.jsonl", Module: &jsonl.Store{Dir: dir}},
@@ -45,7 +45,7 @@ func TestResume(t *testing.T) {
 
 	dir := t.TempDir()
 	first := &counter{}
-	s1 := start(t, dir, "sess", "", first)
+	s1 := start(t, dir, "", first)
 	if err := s1.Emit(events.UserMessage{Text: "hi"}); err != nil && !errors.Is(err, aish.ErrUnhandled) {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestResume(t *testing.T) {
 	}
 
 	second := &counter{}
-	s2 := start(t, dir, "sess", "sess", second)
+	s2 := start(t, dir, "sess", second)
 	s2.Wait()
 	got := s2.Journal().Txs()
 	if len(got) != len(want)+1 {
@@ -103,5 +103,42 @@ func TestResumeMissingFile(t *testing.T) {
 	}
 	if err := s.Start(); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("Start = %v, want ErrNotExist", err)
+	}
+}
+
+// A process that died while writing leaves half a record. Resume must cut it
+// off, or the next record would be glued to it and break the following resume.
+func TestResumeCutsTruncatedTail(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	s1 := start(t, dir, "", &counter{})
+	s1.Wait()
+	if err := s1.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "sess.jsonl")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"Seq":9,"Sta`); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2 := start(t, dir, "sess", &counter{})
+	s2.Wait()
+	if err := s2.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	// The third session reads what the second one appended.
+	s3 := start(t, dir, "sess", &counter{})
+	s3.Wait()
+	if got := s3.Journal().Len(); got != 3 {
+		t.Fatalf("journal has %d transactions, want 3 session.started", got)
 	}
 }

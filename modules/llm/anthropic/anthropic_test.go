@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/GoldenDeals/aish-core/events"
 	"github.com/GoldenDeals/aish-core/modules/llm/anthropic"
 	"github.com/GoldenDeals/aish-core/test"
+	"github.com/GoldenDeals/aish-core/transcript"
 )
 
 const sse = `event: message_start
@@ -146,5 +148,88 @@ func TestAPIErrorFailsTheHook(t *testing.T) {
 	var hookErr *aish.HookError
 	if err := s.Emit(request()); !errors.As(err, &hookErr) {
 		t.Fatalf("Emit = %v, want a *HookError", err)
+	}
+}
+
+// interleaved is a reply whose thinking blocks sit between tool calls and
+// carry no thinking text (display omitted): only a signature each.
+const interleaved = `event: message_start
+data: {"type":"message_start","message":{"id":"msg_2","type":"message","role":"assistant","model":"claude-opus-5-5","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sigA"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_a","name":"fs_read","input":{}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{}"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":1}
+
+event: content_block_start
+data: {"type":"content_block_start","index":2,"content_block":{"type":"thinking","thinking":"","signature":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":2,"delta":{"type":"signature_delta","signature":"sigB"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":2}
+
+event: content_block_start
+data: {"type":"content_block_start","index":3,"content_block":{"type":"tool_use","id":"toolu_b","name":"fs_read","input":{}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"input_json_delta","partial_json":"{}"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":3}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":20}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`
+
+// The provider rejects a replayed assistant message whose thinking blocks
+// moved or vanished, so the history must keep the order of the reply.
+func TestHistoryKeepsBlockOrder(t *testing.T) {
+	t.Parallel()
+
+	srv := &server{}
+	mod := &anthropic.Anthropic{APIKey: "k", BaseURL: srv.start(t, http.StatusOK, interleaved)}
+	s := test.NewSession(t, aish.Instance{Name: "llm.anthropic", Module: mod})
+	if err := s.Emit(request()); err != nil {
+		t.Fatal(err)
+	}
+	s.Wait()
+
+	msgs := transcript.Build(s.Journal().Txs())
+	if len(msgs) == 0 || msgs[0].Role != events.RoleAssistant {
+		t.Fatalf("messages = %+v", msgs)
+	}
+	var got []string
+	for _, b := range msgs[0].Content {
+		switch b.Type {
+		case events.BlockThinking:
+			got = append(got, "thinking:"+b.Signature)
+		case events.BlockToolUse:
+			got = append(got, "tool_use:"+b.ID+":"+b.Name)
+		default:
+			got = append(got, b.Type)
+		}
+	}
+	want := "thinking:sigA tool_use:toolu_a:fs_read thinking:sigB tool_use:toolu_b:fs_read"
+	if strings.Join(got, " ") != want {
+		t.Errorf("assistant blocks = %v, want %s", got, want)
 	}
 }

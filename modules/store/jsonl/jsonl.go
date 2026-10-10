@@ -184,7 +184,10 @@ func (s *Store) restore(name string) error {
 			break
 		}
 		if errors.Is(err, io.ErrUnexpectedEOF) {
-			s.h.Log().Warn("ignoring truncated last record", "file", name)
+			s.h.Log().Warn("dropping truncated last record", "file", name)
+			if err := s.cutTail(name, dec.InputOffset()); err != nil {
+				return err
+			}
 
 			break
 		}
@@ -198,6 +201,25 @@ func (s *Store) restore(name string) error {
 		txs = append(txs, tx)
 	}
 	if err := s.h.Seed(txs...); err != nil {
+		return fmt.Errorf("aish: store.jsonl: %w", err)
+	}
+
+	return nil
+}
+
+// cutTail removes everything after the last whole record (the process died
+// while writing) so that the next record starts on a line of its own.
+func (s *Store) cutTail(name string, end int64) error {
+	f, err := s.root.OpenFile(name, os.O_WRONLY, 0)
+	if err != nil {
+		return fmt.Errorf("aish: store.jsonl: %w", err)
+	}
+	defer f.Close()
+
+	if err := f.Truncate(end); err != nil {
+		return fmt.Errorf("aish: store.jsonl: truncate %s: %w", name, err)
+	}
+	if _, err := f.WriteAt([]byte{'\n'}, end); err != nil {
 		return fmt.Errorf("aish: store.jsonl: %w", err)
 	}
 

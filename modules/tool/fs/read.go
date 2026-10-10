@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	aish "github.com/GoldenDeals/aish-core"
@@ -49,18 +50,35 @@ func (r *Read) read(input json.RawMessage) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	data, err := r.root.ReadFile(rel)
+	data, err := r.readBounded(rel)
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", in.Path, err)
 	}
 	if len(data) > maxFileBytes {
-		return "", fmt.Errorf("%s is %d bytes, over the %d byte limit", in.Path, len(data), maxFileBytes)
+		return "", fmt.Errorf("%s is over the %d byte limit", in.Path, maxFileBytes)
 	}
 	if bytes.IndexByte(data[:min(len(data), binarySniff)], 0) >= 0 {
 		return "", fmt.Errorf("%s looks like a binary file", in.Path)
 	}
 
 	return lines(string(data), in.Offset, in.Limit), nil
+}
+
+// readBounded reads at most maxFileBytes+1 bytes, so a huge file cannot
+// exhaust memory before the size check.
+func (r *Read) readBounded(rel string) ([]byte, error) {
+	f, err := r.root.Open(rel)
+	if err != nil {
+		return nil, fmt.Errorf("open: %w", err)
+	}
+	defer f.Close()
+
+	data, err := io.ReadAll(io.LimitReader(f, maxFileBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read: %w", err)
+	}
+
+	return data, nil
 }
 
 // lines returns up to limit lines from the 1-based offset and says when it
@@ -77,7 +95,7 @@ func lines(text string, offset, limit int) string {
 	if first >= len(all) {
 		return fmt.Sprintf("[file has %d lines]", len(all))
 	}
-	last := min(first+limit, len(all))
+	last := first + min(limit, len(all)-first) // not first+limit: limit may be huge
 	out := strings.Join(all[first:last], "")
 	if first > 0 || last < len(all) {
 		out += fmt.Sprintf("\n[lines %d-%d of %d]", first+1, last, len(all))

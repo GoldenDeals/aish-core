@@ -34,8 +34,15 @@ type eventDecoder struct {
 // an event type registers it from init(); E must be JSON-decodable. It panics
 // if the Kind is already taken by another Go type.
 func RegisterEvent[E Event]() {
+	typ := reflect.TypeFor[E]()
 	var zero E
-	kind, typ := zero.Kind(), reflect.TypeFor[E]()
+	if typ.Kind() == reflect.Pointer {
+		// Kind may have a value receiver, which a nil pointer cannot call.
+		if v, ok := reflect.New(typ.Elem()).Interface().(E); ok {
+			zero = v
+		}
+	}
+	kind := zero.Kind()
 
 	decoders.Lock()
 	defer decoders.Unlock()

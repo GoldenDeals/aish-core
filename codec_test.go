@@ -60,3 +60,16 @@ func TestStreamJSONRoundTrip(t *testing.T) {
 		t.Fatalf("body %v", b)
 	}
 }
+
+type ptrEvent struct{ N int }
+
+func (ptrEvent) Kind() string { return "codec.ptr" }
+
+func TestRegisterEventPointerType(t *testing.T) {
+	aish.RegisterEvent[*ptrEvent]()
+
+	ev, ok, err := aish.DecodeEvent("codec.ptr", json.RawMessage(`{"N":3}`))
+	if err != nil || !ok || ev.(*ptrEvent).N != 3 {
+		t.Fatalf("got %v %v %v", ev, ok, err)
+	}
+}

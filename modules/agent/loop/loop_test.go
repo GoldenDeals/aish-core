@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 
 	aish "github.com/GoldenDeals/aish-core"
 	"github.com/GoldenDeals/aish-core/events"
 	"github.com/GoldenDeals/aish-core/modules/agent/loop"
+	"github.com/GoldenDeals/aish-core/modules/policy/ask"
+	"github.com/GoldenDeals/aish-core/modules/tool/fs"
 	"github.com/GoldenDeals/aish-core/test"
 )
 
@@ -95,5 +99,36 @@ func TestMaxSteps(t *testing.T) {
 	}
 	if !stopped {
 		t.Fatal("no loop.stopped in the journal")
+	}
+}
+
+// warnings runs a session with the instances and returns what the loop logged
+// at Start.
+func warnings(t *testing.T, instances ...aish.Instance) string {
+	t.Helper()
+
+	var buf strings.Builder
+	s := test.NewSessionWith(t, aish.SessionConfig{
+		Instances: append([]aish.Instance{{Name: "agent.loop", Module: &loop.Loop{}}}, instances...),
+		Log:       slog.New(slog.NewTextHandler(&buf, nil)),
+	})
+	s.Wait()
+
+	return buf.String()
+}
+
+func TestWarnsWithoutPolicy(t *testing.T) {
+	t.Parallel()
+
+	// fs_read's effects hook has priority 2000: a normalizer, not a policy.
+	reader := &fs.Read{}
+	reader.Root = t.TempDir()
+	tool := aish.Instance{Name: "tool.fs_read", Module: reader}
+
+	if got := warnings(t, tool); !strings.Contains(got, "no policy") {
+		t.Errorf("no warning without a policy:\n%s", got)
+	}
+	if got := warnings(t, tool, aish.Instance{Name: "policy.ask", Module: &ask.Policy{}}); strings.Contains(got, "no policy") {
+		t.Errorf("warning despite a policy:\n%s", got)
 	}
 }

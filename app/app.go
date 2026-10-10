@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	aish "github.com/GoldenDeals/aish-core"
 	"github.com/GoldenDeals/aish-core/config"
@@ -24,6 +25,8 @@ import (
 const (
 	logDirMode  = 0o755
 	logFileMode = 0o600
+	// termGrace is how long SIGTERM lets the agent finish its step.
+	termGrace = 30 * time.Second
 )
 
 // Run parses the command line and runs the session.
@@ -116,8 +119,16 @@ func serve(s *aish.Session, instances []aish.Instance) error {
 	}
 	<-done
 
-	// Close cancels whatever is still open, so wait for the agent first.
-	return errors.Join(s.Wait(ctx), s.Close(context.Background()))
+	// Close cancels whatever is still open, so wait for the agent first. After
+	// SIGTERM ctx is already done: give the agent a bounded time instead.
+	drain, cancel := context.WithCancel(context.Background())
+	if ctx.Err() != nil {
+		cancel()
+		drain, cancel = context.WithTimeout(context.Background(), termGrace)
+	}
+	defer cancel()
+
+	return errors.Join(s.Wait(drain), s.Close(context.Background()))
 }
 
 // traceFile appends the trace of each transaction to a file right after it

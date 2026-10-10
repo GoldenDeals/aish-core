@@ -13,6 +13,9 @@ import (
 const (
 	defaultMaxSteps = 50
 	policyPriority  = 1000
+	// normalizePriority is where tools describe their calls; it is above the
+	// policy band, and those hooks are not policies.
+	normalizePriority = 2000
 	// messagesPriority is above every other llm.request hook that reads
 	// Messages.
 	messagesPriority = 3000
@@ -57,7 +60,7 @@ func (l *Loop) Init(_ context.Context, h *aish.Host) error {
 // Start warns when no policy can intercept tool calls.
 func (l *Loop) Start(context.Context) error {
 	for _, hk := range l.h.Hooks[events.ToolCall]() {
-		if hk.Mode == aish.ModeMutate && hk.Priority >= policyPriority {
+		if hk.Mode == aish.ModeMutate && hk.Priority >= policyPriority && hk.Priority < normalizePriority {
 			return nil
 		}
 	}
@@ -68,7 +71,16 @@ func (l *Loop) Start(context.Context) error {
 
 func (l *Loop) onCommitted(ctx context.Context, c aish.TxCommitted) {
 	trigger, fresh, ok := continuation(c.Tx)
-	if !ok || l.pending {
+	if !ok {
+		return
+	}
+	if l.pending {
+		// The queued request will carry this message too, as the first step
+		// after it.
+		if fresh {
+			l.steps = 1
+		}
+
 		return
 	}
 	if fresh {

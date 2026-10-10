@@ -147,6 +147,7 @@ type ContentDelta struct {
 	Data       []byte // DeltaRedactedThinking
 	StopReason string // DeltaStop: "end_turn", "tool_use", "max_tokens"
 	Usage      *Usage // DeltaStop
+	ToolID     string // DeltaToolUse: ToolCall.ID
 }
 
 const (
@@ -155,6 +156,10 @@ const (
 	DeltaSignature        = "signature"
 	DeltaRedactedThinking = "redacted_thinking"
 	DeltaStop             = "stop"
+	// DeltaToolUse marks where the tool_use block of the call ToolID sits in
+	// the reply. The provider must replay thinking and tool_use blocks in the
+	// order it produced them, and the call itself is a separate event.
+	DeltaToolUse = "tool_use"
 )
 
 type Usage struct {
@@ -179,7 +184,8 @@ func (m AssistantMessage) Text() string {
 // Blocks assembles the chunks written so far into text, thinking and
 // redacted thinking blocks, in stream order. A thinking block without a
 // signature (the turn was cut off) is dropped: the provider would reject it.
-// Empty text blocks are dropped too.
+// Empty text blocks are dropped too. A DeltaToolUse becomes a tool_use block
+// that carries only its ID; transcript.Build fills in the call.
 func (m AssistantMessage) Blocks() []Block {
 	var out []Block
 	open := "" // BlockText or BlockThinking while chunks append to text
@@ -214,6 +220,9 @@ func (m AssistantMessage) Blocks() []Block {
 		case DeltaRedactedThinking:
 			finish("")
 			out = append(out, Block{Type: BlockRedactedThinking, Data: d.Data})
+		case DeltaToolUse:
+			finish("")
+			out = append(out, Block{Type: BlockToolUse, ID: d.ToolID})
 		default: // DeltaStop and unknown chunks carry no content
 		}
 	}
