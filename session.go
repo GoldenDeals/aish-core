@@ -55,6 +55,8 @@ type sessionConfig struct {
 	log       *slog.Logger
 	now       func() time.Time
 	warnAfter time.Duration
+
+	streamTimeout time.Duration
 }
 
 // session runs transactions one at a time. A single runner goroutine
@@ -67,6 +69,8 @@ type session struct {
 	log       *slog.Logger
 	now       func() time.Time
 	warnAfter time.Duration
+
+	streamTimeout time.Duration
 
 	hooks   hookRegistry
 	journal Journal
@@ -92,9 +96,11 @@ func newSession(cfg sessionConfig) *session {
 		cancel:    cancel,
 		now:       cfg.now,
 		warnAfter: cfg.warnAfter,
-		idle:      make(chan struct{}),
-		wake:      make(chan struct{}, 1),
-		stopped:   make(chan struct{}),
+
+		streamTimeout: cfg.streamTimeout,
+		idle:          make(chan struct{}),
+		wake:          make(chan struct{}, 1),
+		stopped:       make(chan struct{}),
 	}
 	base := slog.DiscardHandler
 	if cfg.log != nil {
@@ -192,9 +198,19 @@ func (s *session) seed(txs []Tx) error {
 	return nil
 }
 
+// onRunner reports whether ctx belongs to a hook, which runs on the runner
+// goroutine. Waiting for the runner from there would wait for itself.
+func (s *session) onRunner(ctx context.Context) bool {
+	info := infoOf(ctx)
+
+	return info != nil && info.sess == s && info.hook != nil
+}
+
 // close cancels the open transaction, waits for it to commit and fails
-// everything still queued with ErrClosed.
-func (s *session) close() {
+// everything still queued with ErrClosed. Called from a hook it does not wait:
+// the runner exits when the hook returns. If ctx ends first, it returns the
+// ctx error and the runner stops on its own once the stuck hook returns.
+func (s *session) close(ctx context.Context) error {
 	s.mu.Lock()
 	wasRunning := s.running
 	s.closed = true
@@ -202,8 +218,15 @@ func (s *session) close() {
 	s.mu.Unlock()
 	s.cancel()
 	s.signal()
-	if wasRunning {
-		<-s.stopped
+	if !wasRunning || s.onRunner(ctx) {
+		return nil
+	}
+
+	select {
+	case <-s.stopped:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("aish: close: %w", ctx.Err())
 	}
 }
 
@@ -392,12 +415,15 @@ func (s *session) beginTx() *txState {
 // observe delivers a committed event to Observe hooks, one at a time.
 func (s *session) observe(ev Event, meta Meta) {
 	for _, hk := range s.hooks.snapshot(ev.Kind(), ModeObserve) {
-		ctx := context.WithValue(s.ctx, ctxKey{}, &ctxInfo{sess: s, hook: hk, observe: true, meta: meta})
 		err := safeCall(func() error {
-			c := deepcopy.Copy(ev)
-			if hk.where == nil || hk.where(c) {
-				hk.observe(ctx, c)
+			if hk.where != nil && !hk.where(ev) {
+				return nil
 			}
+			// The ctx ends with the hook, so Stream.Chunks readers do not outlive it.
+			ctx, cancel := context.WithCancel(s.ctx)
+			defer cancel()
+			ctx = context.WithValue(ctx, ctxKey{}, &ctxInfo{sess: s, hook: hk, observe: true, meta: meta})
+			hk.observe(ctx, deepcopy.Copy(ev))
 
 			return nil
 		})

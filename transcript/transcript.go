@@ -5,6 +5,7 @@ package transcript
 
 import (
 	aish "github.com/GoldenDeals/aish-core"
+	"github.com/GoldenDeals/aish-core/events"
 	"github.com/GoldenDeals/aish-core/internal/deepcopy"
 )
 
@@ -31,11 +32,11 @@ const MissingResult = "No result: the tool call was interrupted."
 //
 // The messages share nothing with txs: Mutate hooks on llm.request may change
 // them without touching the journal.
-func Build(txs []aish.Tx) []aish.Message {
+func Build(txs []aish.Tx) []events.Message {
 	var b builder
 	upTo, summary := lastCompaction(txs)
 	if summary != "" {
-		b.add(aish.RoleUser, aish.Block{Type: aish.BlockText, Text: summary})
+		b.add(events.RoleUser, events.Block{Type: events.BlockText, Text: summary})
 	}
 	for _, tx := range txs {
 		if tx.Seq > upTo {
@@ -49,7 +50,7 @@ func Build(txs []aish.Tx) []aish.Message {
 func lastCompaction(txs []aish.Tx) (upTo uint64, summary string) {
 	for _, tx := range txs {
 		for _, env := range tx.Events {
-			if c, ok := env.Event.(aish.Compacted); ok {
+			if c, ok := env.Event.(events.Compacted); ok {
 				upTo, summary = c.UpTo, c.Summary
 			}
 		}
@@ -59,12 +60,12 @@ func lastCompaction(txs []aish.Tx) (upTo uint64, summary string) {
 }
 
 type builder struct {
-	msgs []aish.Message
+	msgs []events.Message
 }
 
 // add appends blocks as a message of role, merging with the previous
 // message of the same role.
-func (b *builder) add(role string, blocks ...aish.Block) {
+func (b *builder) add(role string, blocks ...events.Block) {
 	if len(blocks) == 0 {
 		return
 	}
@@ -73,37 +74,37 @@ func (b *builder) add(role string, blocks ...aish.Block) {
 
 		return
 	}
-	b.msgs = append(b.msgs, aish.Message{Role: role, Content: blocks})
+	b.msgs = append(b.msgs, events.Message{Role: role, Content: blocks})
 }
 
 func (b *builder) tx(tx aish.Tx) {
-	results := map[string]aish.ToolResult{}
+	results := map[string]events.ToolResult{}
 	for _, env := range tx.Events {
-		if r, ok := env.Event.(aish.ToolResult); ok {
+		if r, ok := env.Event.(events.ToolResult); ok {
 			if _, dup := results[r.CallID]; !dup {
 				results[r.CallID] = r
 			}
 		}
 	}
 
-	var pending []aish.ToolCall // calls of the last assistant message
+	var pending []events.ToolCall // calls of the last assistant message
 	flush := func() {
 		for _, c := range pending {
-			b.add(aish.RoleUser, resultBlock(c, results))
+			b.add(events.RoleUser, resultBlock(c, results))
 		}
 		pending = nil
 	}
 
 	for _, env := range tx.Events {
 		switch ev := env.Event.(type) {
-		case aish.UserMessage:
+		case events.UserMessage:
 			flush()
-			b.add(aish.RoleUser, userBlocks(ev)...)
-		case aish.AssistantMessage:
+			b.add(events.RoleUser, userBlocks(ev)...)
+		case events.AssistantMessage:
 			flush()
-			b.add(aish.RoleAssistant, ev.Blocks()...)
-		case aish.ToolCall:
-			b.add(aish.RoleAssistant, aish.Block{Type: aish.BlockToolUse, ID: ev.ID, Name: ev.Name, Input: ev.Input})
+			b.add(events.RoleAssistant, ev.Blocks()...)
+		case events.ToolCall:
+			b.add(events.RoleAssistant, events.Block{Type: events.BlockToolUse, ID: ev.ID, Name: ev.Name, Input: ev.Input})
 			pending = append(pending, ev)
 		default:
 		}
@@ -111,23 +112,23 @@ func (b *builder) tx(tx aish.Tx) {
 	flush()
 }
 
-func userBlocks(m aish.UserMessage) []aish.Block {
-	var out []aish.Block
+func userBlocks(m events.UserMessage) []events.Block {
+	var out []events.Block
 	if m.Text != "" {
-		out = append(out, aish.Block{Type: aish.BlockText, Text: m.Text})
+		out = append(out, events.Block{Type: events.BlockText, Text: m.Text})
 	}
 
 	return append(out, m.Blocks...)
 }
 
-func resultBlock(c aish.ToolCall, results map[string]aish.ToolResult) aish.Block {
+func resultBlock(c events.ToolCall, results map[string]events.ToolResult) events.Block {
 	r, ok := results[c.ID]
 	if !ok {
-		return aish.Block{
-			Type: aish.BlockToolResult, ToolUseID: c.ID, IsError: true,
-			Content: []aish.Block{{Type: aish.BlockText, Text: MissingResult}},
+		return events.Block{
+			Type: events.BlockToolResult, ToolUseID: c.ID, IsError: true,
+			Content: []events.Block{{Type: events.BlockText, Text: MissingResult}},
 		}
 	}
 
-	return aish.Block{Type: aish.BlockToolResult, ToolUseID: c.ID, Content: r.Content, IsError: r.IsError}
+	return events.Block{Type: events.BlockToolResult, ToolUseID: c.ID, Content: r.Content, IsError: r.IsError}
 }

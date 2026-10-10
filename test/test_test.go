@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	aish "github.com/GoldenDeals/aish-core"
+	"github.com/GoldenDeals/aish-core/events"
 	"github.com/GoldenDeals/aish-core/test"
 )
 
@@ -15,8 +16,8 @@ import (
 type asker struct{}
 
 func (asker) Init(_ context.Context, h *aish.Host) error {
-	h.Handle("ask", func(ctx context.Context, m aish.UserMessage) error {
-		return h.Emit(ctx, aish.UserQuestion{ID: m.Text, Text: "Sure?"})
+	h.Handle("ask", func(ctx context.Context, m events.UserMessage) error {
+		return h.Emit(ctx, events.UserQuestion{ID: m.Text, Text: "Sure?"})
 	})
 
 	return nil
@@ -27,10 +28,10 @@ func TestFrontendRunsOutOfAnswers(t *testing.T) {
 	fe := &test.Frontend{Answers: []string{"yes"}}
 	s := test.NewSession(t, aish.Instance{Name: "test.asker", Module: asker{}}, aish.Instance{Name: "frontend.test", Module: fe})
 
-	if err := s.Emit(aish.UserMessage{Text: "q1"}); !errors.Is(err, aish.ErrUnhandled) {
+	if err := s.Emit(events.UserMessage{Text: "q1"}); !errors.Is(err, aish.ErrUnhandled) {
 		t.Errorf("first question = %v, want only ErrUnhandled for the answer nobody handles", err)
 	}
-	err := s.Emit(aish.UserMessage{Text: "q2"})
+	err := s.Emit(events.UserMessage{Text: "q2"})
 	if err == nil || !strings.Contains(err.Error(), "no answer scripted") {
 		t.Errorf("second question = %v, want the frontend's error", err)
 	}
@@ -39,9 +40,9 @@ func TestFrontendRunsOutOfAnswers(t *testing.T) {
 	if len(fe.Asked) != 2 || fe.Asked[1].ID != "q2" {
 		t.Errorf("Asked = %+v, want both questions", fe.Asked)
 	}
-	events := s.Last().Events
-	kinds := make([]string, 0, len(events))
-	for _, env := range events {
+	evs := s.Last().Events
+	kinds := make([]string, 0, len(evs))
+	for _, env := range evs {
 		kinds = append(kinds, env.Event.Kind())
 	}
 	if !slices.Contains(kinds, "module.error") {

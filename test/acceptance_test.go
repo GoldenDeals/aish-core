@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	aish "github.com/GoldenDeals/aish-core"
+	"github.com/GoldenDeals/aish-core/events"
 	"github.com/GoldenDeals/aish-core/test"
 	"github.com/GoldenDeals/aish-core/trace"
 	"github.com/GoldenDeals/aish-core/transcript"
@@ -21,7 +22,7 @@ import (
 // denied. The policy and the tool below are test doubles of policy ask and
 // tool fs_edit (§8).
 
-func textBlocks(s string) []aish.Block { return []aish.Block{{Type: aish.BlockText, Text: s}} }
+func textBlocks(s string) []events.Block { return []events.Block{{Type: events.BlockText, Text: s}} }
 
 func ignoreUnhandled(err error) error {
 	if errors.Is(err, aish.ErrUnhandled) {
@@ -36,23 +37,23 @@ type fsTool struct {
 	ran []string
 }
 
-func isFS(c aish.ToolCall) bool { return strings.HasPrefix(c.Name, "fs_") }
+func isFS(c events.ToolCall) bool { return strings.HasPrefix(c.Name, "fs_") }
 
 func (f *fsTool) Init(_ context.Context, h *aish.Host) error {
-	h.Mutate("effects", func(_ context.Context, m *aish.Mut[aish.ToolCall]) error {
+	h.Mutate("effects", func(_ context.Context, m *aish.Mut[events.ToolCall]) error {
 		c := m.Event()
 		if c.Name == "fs_read" {
-			c.Effects = aish.Effects{ReadOnly: true, Access: []aish.Access{{Action: "fs.read", Resource: "file:/a.txt"}}}
+			c.Effects = events.Effects{ReadOnly: true, Access: []events.Access{{Action: "fs.read", Resource: "file:/a.txt"}}}
 		} else {
-			c.Effects = aish.Effects{Access: []aish.Access{{Action: "fs.write", Resource: "file:/a.txt"}}}
+			c.Effects = events.Effects{Access: []events.Access{{Action: "fs.write", Resource: "file:/a.txt"}}}
 		}
 
 		return nil
 	}, aish.Priority(2000), aish.Where(isFS))
-	h.Handle("exec", func(ctx context.Context, c aish.ToolCall) error {
+	h.Handle("exec", func(ctx context.Context, c events.ToolCall) error {
 		f.ran = append(f.ran, c.ID)
 
-		return ignoreUnhandled(h.Emit(ctx, aish.ToolResult{CallID: c.ID, Content: textBlocks("done")}))
+		return ignoreUnhandled(h.Emit(ctx, events.ToolResult{CallID: c.ID, Content: textBlocks("done")}))
 	}, aish.Where(isFS))
 
 	return nil
@@ -72,7 +73,7 @@ func (p *askPolicy) Init(_ context.Context, h *aish.Host) error {
 	return nil
 }
 
-func (p *askPolicy) authorize(ctx context.Context, m *aish.Mut[aish.ToolCall]) error {
+func (p *askPolicy) authorize(ctx context.Context, m *aish.Mut[events.ToolCall]) error {
 	if m.Event().Effects.ReadOnly {
 		return nil
 	}
@@ -80,7 +81,7 @@ func (p *askPolicy) authorize(ctx context.Context, m *aish.Mut[aish.ToolCall]) e
 	call := aish.Envelope{Meta: m.Meta(), Event: *m.Event()}
 	p.waiting[call.Meta.ID] = call
 
-	err := p.h.Emit(ctx, aish.UserQuestion{
+	err := p.h.Emit(ctx, events.UserQuestion{
 		ID: call.Meta.ID, Text: "Allow " + m.Event().Name + "?", Options: []string{"yes", "no"}, Ref: call.Meta.ID,
 	})
 	if errors.Is(err, aish.ErrUnhandled) {
@@ -92,7 +93,7 @@ func (p *askPolicy) authorize(ctx context.Context, m *aish.Mut[aish.ToolCall]) e
 	return err
 }
 
-func (p *askPolicy) answer(ctx context.Context, a aish.UserAnswer) error {
+func (p *askPolicy) answer(ctx context.Context, a events.UserAnswer) error {
 	call, ok := p.waiting[a.QuestionID]
 	if !ok {
 		return nil
@@ -107,12 +108,12 @@ func (p *askPolicy) answer(ctx context.Context, a aish.UserAnswer) error {
 
 // deny records the call as denied below executors and answers the model.
 func (p *askPolicy) deny(ctx context.Context, call aish.Envelope, reason string) error {
-	c, _ := call.Event.(aish.ToolCall)
+	c, _ := call.Event.(events.ToolCall)
 	c.Denied = true
 
 	return errors.Join(
 		ignoreUnhandled(p.h.EmitWith(ctx, aish.Below(aish.DefaultPriority), aish.Envelope{Meta: call.Meta, Event: c})),
-		ignoreUnhandled(p.h.Emit(ctx, aish.ToolResult{CallID: c.ID, IsError: true, Content: textBlocks("Tool call denied: " + reason)})),
+		ignoreUnhandled(p.h.Emit(ctx, events.ToolResult{CallID: c.ID, IsError: true, Content: textBlocks("Tool call denied: " + reason)})),
 	)
 }
 
@@ -145,7 +146,7 @@ func TestStage0(t *testing.T) {
 			}
 			s := test.NewSession(t, instances...)
 
-			call := aish.ToolCall{ID: "toolu_1", Name: tc.call, Input: json.RawMessage(`{"path":"a.txt"}`)}
+			call := events.ToolCall{ID: "toolu_1", Name: tc.call, Input: json.RawMessage(`{"path":"a.txt"}`)}
 			if err := s.Emit(call); err != nil {
 				t.Fatal(err)
 			}
@@ -155,13 +156,13 @@ func TestStage0(t *testing.T) {
 			if got := len(tool.ran) == 1; got != tc.ran {
 				t.Errorf("tool ran %v times, want ran=%v", tool.ran, tc.ran)
 			}
-			var journaled aish.ToolCall
-			var res aish.ToolResult
+			var journaled events.ToolCall
+			var res events.ToolResult
 			for _, env := range tx.Events {
 				switch ev := env.Event.(type) {
-				case aish.ToolCall:
+				case events.ToolCall:
 					journaled = ev
-				case aish.ToolResult:
+				case events.ToolResult:
 					res = ev
 				default:
 				}

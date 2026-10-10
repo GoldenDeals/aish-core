@@ -7,6 +7,14 @@ import (
 	"testing"
 )
 
+type seedCall struct{ ID, Name string }
+
+func (seedCall) Kind() string { return "test.seed-call" }
+
+type seedResult struct{ CallID string }
+
+func (seedResult) Kind() string { return "test.seed-result" }
+
 func TestSeedRestoresWithoutHooks(t *testing.T) {
 	t.Parallel()
 
@@ -14,11 +22,11 @@ func TestSeedRestoresWithoutHooks(t *testing.T) {
 	// restored from disk.
 	src, ctx := newTestSession(t)
 	h := src.host("tool.fs")
-	h.Handle("exec", func(ctx context.Context, c ToolCall) error {
-		return ignoreUnhandled(h.Emit(ctx, ToolResult{CallID: c.ID}))
+	h.Handle("exec", func(ctx context.Context, c seedCall) error {
+		return ignoreUnhandled(h.Emit(ctx, seedResult{CallID: c.ID}))
 	})
 	for _, id := range []string{"a", "b"} {
-		if err := h.Emit(ctx, ToolCall{ID: id, Name: "fs_read"}); err != nil {
+		if err := h.Emit(ctx, seedCall{ID: id, Name: "fs_read"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -26,10 +34,10 @@ func TestSeedRestoresWithoutHooks(t *testing.T) {
 
 	// Seed it into a fresh session, as a store does in Init.
 	s := newSession(sessionConfig{})
-	t.Cleanup(s.close)
+	t.Cleanup(func() { _ = s.close(context.Background()) })
 	store := s.host("store.jsonl")
 	var ran, observed int
-	s.host("tool.fs").Handle("exec", func(context.Context, ToolCall) error { ran++; return nil })
+	s.host("tool.fs").Handle("exec", func(context.Context, seedCall) error { ran++; return nil })
 	store.Observe("save", func(context.Context, TxCommitted) { observed++ })
 	if err := store.Seed(restored...); err != nil {
 		t.Fatal(err)
@@ -42,7 +50,7 @@ func TestSeedRestoresWithoutHooks(t *testing.T) {
 	if err := store.Seed(); err == nil {
 		t.Error("Seed succeeded after the session started")
 	}
-	if err := store.Emit(s.startContext(), UserMessage{Text: "go on"}); !errors.Is(err, ErrUnhandled) {
+	if err := store.Emit(s.startContext(), seedResult{CallID: "late"}); !errors.Is(err, ErrUnhandled) {
 		t.Fatal(err)
 	}
 
@@ -60,7 +68,7 @@ func TestSeedRestoresWithoutHooks(t *testing.T) {
 	if !slices.Equal(seqs, []uint64{1, 2, 3}) {
 		t.Errorf("journal seqs = %v, want the seeded 1, 2 and the new 3", seqs)
 	}
-	if c := txs[1].Events[0].Event.(ToolCall); c.ID != "b" {
+	if c := txs[1].Events[0].Event.(seedCall); c.ID != "b" {
 		t.Errorf("seeded tx 2 starts with %+v, want call b", c)
 	}
 }

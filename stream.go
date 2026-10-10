@@ -59,7 +59,8 @@ func (w *StreamWriter[C]) Close(err error) {
 // and read to the end, or when ctx is done. Each chunk is a deep copy.
 //
 // The reading goroutine lives until then, so pass the hook ctx: the core
-// cancels it when the transaction commits.
+// cancels it when the transaction commits, and for an Observe hook when the
+// hook returns.
 func (s Stream[C]) Chunks(ctx context.Context) <-chan C {
 	out := make(chan C)
 	if s.b == nil {

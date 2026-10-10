@@ -120,9 +120,17 @@ type hook struct {
 	handle  func(ctx context.Context, ev Event) error
 	observe func(ctx context.Context, ev Event)
 	removed atomic.Bool
+	reg     *hookRegistry
 }
 
-func (hk *hook) Remove() { hk.removed.Store(true) }
+// Remove is idempotent. A delivery already in progress still skips the hook
+// because of the removed flag.
+func (hk *hook) Remove() {
+	if hk.removed.Swap(true) {
+		return
+	}
+	hk.reg.remove(hk)
+}
 
 // compare orders hooks for delivery: descending priority, then hook ID.
 func (hk *hook) compare(other *hook) int {
@@ -150,12 +158,26 @@ func (r *hookRegistry) add(hk *hook) {
 		panic(fmt.Sprintf("aish: hook %s registered twice", hk.info.ID))
 	}
 	r.ids[hk.info.ID] = true
+	hk.reg = r
 
 	if hk.info.Kind == "" {
 		r.all = append(r.all, hk)
 	} else {
 		r.byKind[hk.info.Kind] = append(r.byKind[hk.info.Kind], hk)
 	}
+}
+
+func (r *hookRegistry) remove(hk *hook) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	delete(r.ids, hk.info.ID)
+	if hk.info.Kind == "" {
+		r.all = slices.DeleteFunc(r.all, func(h *hook) bool { return h == hk })
+
+		return
+	}
+	r.byKind[hk.info.Kind] = slices.DeleteFunc(r.byKind[hk.info.Kind], func(h *hook) bool { return h == hk })
 }
 
 // checkType panics if kind is already bound to a different Go type.

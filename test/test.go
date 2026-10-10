@@ -11,6 +11,7 @@ import (
 	"time"
 
 	aish "github.com/GoldenDeals/aish-core"
+	"github.com/GoldenDeals/aish-core/events"
 )
 
 // DriverInstance is the instance through which Session.Emit emits on
@@ -112,24 +113,24 @@ func (d *driver) Start(ctx context.Context) error {
 type Frontend struct {
 	Answers []string // UserAnswer.Choice, in order
 
-	Asked  []aish.UserQuestion
-	Denied []aish.ToolCall // denied calls, which reach hooks below executors
+	Asked  []events.UserQuestion
+	Denied []events.ToolCall // denied calls, which reach hooks below executors
 }
 
 func (f *Frontend) Init(_ context.Context, h *aish.Host) error {
-	h.Handle("ask", func(ctx context.Context, q aish.UserQuestion) error {
+	h.Handle("ask", func(ctx context.Context, q events.UserQuestion) error {
 		f.Asked = append(f.Asked, q)
 		if len(f.Asked) > len(f.Answers) {
 			return fmt.Errorf("aish: test frontend: no answer scripted for question %q", q.Text)
 		}
 
-		return h.Emit(ctx, aish.UserAnswer{QuestionID: q.ID, Choice: f.Answers[len(f.Asked)-1]})
+		return h.Emit(ctx, events.UserAnswer{QuestionID: q.ID, Choice: f.Answers[len(f.Asked)-1]})
 	})
-	h.Handle("show-denied", func(_ context.Context, c aish.ToolCall) error {
+	h.Handle("show-denied", func(_ context.Context, c events.ToolCall) error {
 		f.Denied = append(f.Denied, c)
 
 		return nil
-	}, aish.Priority(0), aish.Where(func(c aish.ToolCall) bool { return c.Denied }))
+	}, aish.Priority(0), aish.Where(func(c events.ToolCall) bool { return c.Denied }))
 
 	return nil
 }

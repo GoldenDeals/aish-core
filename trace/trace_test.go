@@ -7,6 +7,7 @@ import (
 	"time"
 
 	aish "github.com/GoldenDeals/aish-core"
+	"github.com/GoldenDeals/aish-core/events"
 )
 
 func TestWrite(t *testing.T) {
@@ -21,7 +22,7 @@ func TestWrite(t *testing.T) {
 			{Event: "3.2", Kind: "tool.result", Action: aish.TraceLimit, Depth: 17, Err: "limit"},
 			{Action: aish.TraceWarn, Hook: "frontend.cli:ask", Err: "possible deadlock"},
 		},
-		Events: []aish.Envelope{{Meta: aish.Meta{ID: "3.1"}, Event: aish.UserMessage{}}},
+		Events: []aish.Envelope{{Meta: aish.Meta{ID: "3.1"}, Event: events.UserMessage{}}},
 	}
 	var b strings.Builder
 	if err := Write(&b, tx); err != nil {

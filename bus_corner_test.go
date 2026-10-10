@@ -196,7 +196,7 @@ func TestEmitNothing(t *testing.T) {
 	if err := h.Emit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	s.close()
+	_ = s.close(context.Background())
 	if started || s.journal.Len() != 0 {
 		t.Error("an empty Emit opened a transaction")
 	}
@@ -222,7 +222,7 @@ func TestEmitRejectsInvalidEvents(t *testing.T) {
 			t.Errorf("Emit of %s succeeded", name)
 		}
 	}
-	s.close()
+	_ = s.close(context.Background())
 	if n := s.journal.Len(); n != 0 {
 		t.Errorf("journal has %d transactions; a rejected Emit must not queue its valid events either", n)
 	}
@@ -562,7 +562,7 @@ func TestStoredObserveContextAfterClose(t *testing.T) {
 	if err := h.Emit(ctx, note{}); !errors.Is(err, ErrUnhandled) {
 		t.Fatal(err)
 	}
-	s.close()
+	_ = s.close(context.Background())
 	if err := h.Emit(observeCtx, note{}); !errors.Is(err, ErrClosed) {
 		t.Errorf("Emit after close = %v, want ErrClosed", err)
 	}
@@ -665,7 +665,7 @@ func TestMetaOfAndSources(t *testing.T) {
 	clock := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
 	s := newSession(sessionConfig{now: func() time.Time { return clock }})
 	s.start()
-	t.Cleanup(s.close)
+	t.Cleanup(func() { _ = s.close(context.Background()) })
 	ctx := s.startContext()
 	h := s.host("m")
 
@@ -696,7 +696,7 @@ func TestNoDeadlockWarningForAnotherInstance(t *testing.T) {
 	t.Parallel()
 	s := newSession(sessionConfig{warnAfter: 5 * time.Millisecond})
 	s.start()
-	t.Cleanup(s.close)
+	t.Cleanup(func() { _ = s.close(context.Background()) })
 	ctx := s.startContext()
 	h, other := s.host("m"), s.host("other")
 
@@ -749,7 +749,7 @@ func TestSeedEdgeCases(t *testing.T) {
 		t.Error("a second Seed repeated a sequence number")
 	}
 	s.start()
-	t.Cleanup(s.close)
+	t.Cleanup(func() { _ = s.close(context.Background()) })
 	if err := h.Emit(s.startContext(), note{}); !errors.Is(err, ErrUnhandled) {
 		t.Fatal(err)
 	}

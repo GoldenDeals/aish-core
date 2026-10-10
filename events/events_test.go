@@ -1,13 +1,15 @@
-package aish
+package events
 
 import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/GoldenDeals/aish-core"
 )
 
 func message0(deltas ...ContentDelta) AssistantMessage {
-	s, w := NewStream[ContentDelta]()
+	s, w := aish.NewStream[ContentDelta]()
 	for _, d := range deltas {
 		w.Write(d)
 	}

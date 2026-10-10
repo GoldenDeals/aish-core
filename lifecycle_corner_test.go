@@ -235,3 +235,157 @@ func TestSessionIDs(t *testing.T) {
 		t.Errorf("Host.Session = %+v, child %+v; want the session info", seen, b.Info())
 	}
 }
+
+// hookSession starts a session whose module hands out its Host and Start ctx.
+func hookSession(t *testing.T, cfg aish.SessionConfig, init func(*aish.Host)) (s *aish.Session, h *aish.Host, startCtx context.Context) {
+	t.Helper()
+	m := &full{name: "m", calls: &calls{}}
+	m.init = func(_ context.Context, host *aish.Host) error {
+		h = host
+		init(host)
+
+		return nil
+	}
+	m.start = func(ctx context.Context) error { startCtx = ctx; return nil }
+	cfg.Instances = []aish.Instance{{Name: "test.m", Module: m}}
+
+	return mustStart(t, cfg), h, startCtx
+}
+
+func TestCloseFromHookDoesNotHang(t *testing.T) {
+	t.Parallel()
+	var sess *aish.Session
+	var closeErr error
+	var closeCalled bool
+	s, host, startCtx := hookSession(t, aish.SessionConfig{}, func(h *aish.Host) {
+		h.Handle("quit", func(ctx context.Context, _ ping) error {
+			closeCalled = true
+			closeErr = sess.Close(ctx)
+
+			return nil
+		})
+	})
+	sess = s
+
+	done := make(chan struct{})
+	go func() { defer close(done); _ = host.Emit(startCtx, ping{}) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close from a hook hangs")
+	}
+	if !closeCalled || closeErr != nil {
+		t.Errorf("Close from a hook: called %v, err %v", closeCalled, closeErr)
+	}
+	if err := host.Emit(startCtx, ping{}); !errors.Is(err, aish.ErrClosed) {
+		t.Errorf("Emit after Close from a hook = %v, want ErrClosed", err)
+	}
+}
+
+func TestCloseHonoursItsDeadlineWithStuckHook(t *testing.T) {
+	t.Parallel()
+	entered, release := make(chan struct{}), make(chan struct{})
+	s, host, startCtx := hookSession(t, aish.SessionConfig{}, func(h *aish.Host) {
+		h.Handle("stuck", func(context.Context, ping) error {
+			close(entered)
+			<-release // ignores cancellation
+
+			return nil
+		})
+	})
+	t.Cleanup(func() { close(release) })
+
+	go func() { _ = host.Emit(startCtx, ping{}) }()
+	<-entered
+
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if err := s.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Close with a stuck hook = %v, want the ctx error", err)
+	}
+}
+
+func TestStreamTimeoutCancelsStalledTransaction(t *testing.T) {
+	t.Parallel()
+	s, host, startCtx := hookSession(t, aish.SessionConfig{StreamTimeout: 50 * time.Millisecond}, func(h *aish.Host) {
+		h.Handle("producer", func(context.Context, streamed) error { return nil })
+	})
+	stream, _ := aish.NewStream[string]() // the producer forgets to Close
+
+	err := host.Emit(startCtx, streamed{Text: stream})
+	if !errors.Is(err, aish.ErrStreamStalled) {
+		t.Errorf("Emit = %v, want ErrStreamStalled", err)
+	}
+	if !errors.Is(stream.Err(), aish.ErrStreamStalled) {
+		t.Errorf("stream error = %v, want ErrStreamStalled", stream.Err())
+	}
+	if tx, _ := s.Journal().Last(); tx.Status != aish.StatusCancelled {
+		t.Errorf("status = %v, want cancelled", tx.Status)
+	}
+}
+
+type streamed struct{ Text aish.Stream[string] }
+
+func (streamed) Kind() string { return "test.streamed" }
+
+type listed struct{ Items []string }
+
+func (listed) Kind() string { return "test.listed" }
+
+func TestJournalDoesNotShareMemoryWithEmitter(t *testing.T) {
+	t.Parallel()
+	s, host, startCtx := hookSession(t, aish.SessionConfig{}, func(h *aish.Host) {
+		h.Handle("sink", func(context.Context, listed) error { return nil })
+	})
+	items := []string{"a"}
+	if err := host.Emit(startCtx, listed{Items: items}); err != nil {
+		t.Fatal(err)
+	}
+	items[0] = "CHANGED"
+
+	tx, _ := s.Journal().Last()
+	if got := tx.Events[0].Event.(listed).Items[0]; got != "a" {
+		t.Errorf("journaled item = %q, want the value at Emit time", got)
+	}
+}
+
+func TestResubscribeAfterRemove(t *testing.T) {
+	t.Parallel()
+	var sub aish.Sub
+	var calls int
+	_, host, startCtx := hookSession(t, aish.SessionConfig{}, func(h *aish.Host) {
+		sub = h.Handle("h", func(context.Context, ping) error { calls++; return nil })
+		h.Handle("other", func(context.Context, ping) error { return nil })
+	})
+	sub.Remove()
+	sub.Remove() // idempotent: must not drop the new subscription below
+	sub = host.Handle("h", func(context.Context, ping) error { calls += 10; return nil })
+
+	if err := host.Emit(startCtx, ping{}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 10 {
+		t.Errorf("calls = %d, want only the new hook (10)", calls)
+	}
+	if n := len(host.Hooks[ping]()); n != 2 {
+		t.Errorf("%d hooks for test.ping, want 2", n)
+	}
+}
+
+func TestObserveCtxEndsWithHook(t *testing.T) {
+	t.Parallel()
+	var obsCtx context.Context
+	s, host, startCtx := hookSession(t, aish.SessionConfig{}, func(h *aish.Host) {
+		h.Handle("sink", func(context.Context, ping) error { return nil })
+		h.Observe("obs", func(ctx context.Context, _ ping) { obsCtx = ctx })
+	})
+	if err := host.Emit(startCtx, ping{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if obsCtx == nil || obsCtx.Err() == nil {
+		t.Error("the Observe hook ctx is still alive after the hook returned")
+	}
+}

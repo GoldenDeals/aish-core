@@ -44,7 +44,7 @@ func newTestSession(t *testing.T) (*session, context.Context) {
 	t.Helper()
 	s := newSession(sessionConfig{})
 	s.start()
-	t.Cleanup(s.close)
+	t.Cleanup(func() { _ = s.close(context.Background()) })
 	ctx := s.startContext()
 
 	return s, ctx
@@ -528,7 +528,7 @@ func TestDeadlockWarning(t *testing.T) {
 		warnAfter: 10 * time.Millisecond,
 	})
 	s.start()
-	t.Cleanup(s.close)
+	t.Cleanup(func() { _ = s.close(context.Background()) })
 	startCtx := s.startContext()
 	h := s.host("m")
 
@@ -603,7 +603,7 @@ func TestObserveIsSynchronousAndOrdered(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-secondDone
-	s.close() // waits for the second transaction and its Observe hooks
+	_ = s.close(context.Background()) // waits for the second transaction and its Observe hooks
 
 	if emitErr != nil || lenAfterEmit != 1 {
 		t.Errorf("Emit from Observe = %v with journal len %d; want nil and 1 (queued, not run)", emitErr, lenAfterEmit)
@@ -665,7 +665,7 @@ func TestHooksGetDeepCopies(t *testing.T) {
 	if err := h.Emit(ctx, call{Args: map[string]any{"path": "a.txt"}, Tags: []string{"read"}}); err != nil {
 		t.Fatal(err)
 	}
-	s.close()
+	_ = s.close(context.Background())
 
 	if seen.Args["path"] != "a.txt" || seen.Tags[0] != "read" {
 		t.Errorf("second Handle hook saw %+v; changes of another hook leaked", seen)

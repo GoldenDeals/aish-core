@@ -133,7 +133,8 @@ func (tx *txState) deliver(ev Event, opts EmitOpts, sender *hook, source string,
 		return tx.limit(meta.ID, kind, depth, fmt.Errorf("%w: emit nested deeper than %d", ErrLimit, maxDepth))
 	}
 
-	rec := &record{env: Envelope{Meta: meta, Event: ev}}
+	// The journal must not share memory with the emitter.
+	rec := &record{env: Envelope{Meta: meta, Event: deepcopy.Copy(ev)}}
 	tx.records = append(tx.records, rec)
 	tx.emitted++
 	if err := tx.cancelled(); err != nil {
@@ -167,12 +168,12 @@ func (tx *txState) deliver(ev Event, opts EmitOpts, sender *hook, source string,
 			if tx.ctx.Err() != nil {
 				break
 			}
-			c := deepcopy.Copy(rec.env.Event)
-			ok, err := tx.admit(hk, rec, c, opts, sender, depth)
+			ok, err := tx.admit(hk, rec, rec.env.Event, opts, sender, depth)
 			errs = append(errs, err)
 			if !ok {
 				continue
 			}
+			c := deepcopy.Copy(rec.env.Event)
 			handled = true
 			errs = append(errs, tx.runHandle(hk, rec, c, depth))
 		}
@@ -332,8 +333,14 @@ func (tx *txState) cancelled() error {
 
 // awaitStreams blocks until every stream of the journaled events is closed.
 // If the transaction is cancelled first, it closes the open streams with the
-// cancellation error and returns that error.
+// cancellation error and returns that error. The cancellation may come from
+// the stream timeout.
 func (tx *txState) awaitStreams() error {
+	if d := tx.s.streamTimeout; d > 0 {
+		stall := time.AfterFunc(d, func() { tx.cancel(fmt.Errorf("%w within %s", ErrStreamStalled, d)) })
+		defer stall.Stop()
+	}
+
 	var aborted bool
 	for _, rec := range tx.records {
 		if rec.removed {

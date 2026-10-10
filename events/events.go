@@ -1,8 +1,10 @@
-package aish
+package events
 
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/GoldenDeals/aish-core"
 )
 
 // Shared event types (§5). They are the public API between modules:
@@ -36,8 +38,8 @@ type UserAnswer struct {
 // hooks assemble it: the order of System sections and Tools is the order of
 // the hooks that add them, which keeps the prompt cache stable.
 type LLMRequest struct {
-	Provider string // provider instance: "default", "fast"
-	Trigger  Meta   // what caused the request: user.message or tool.result
+	Provider string    // provider instance: "default", "fast"
+	Trigger  aish.Meta // what caused the request: user.message or tool.result
 	System   []*Section
 	Tools    []ToolSpec
 	Messages []Message
@@ -126,7 +128,7 @@ const (
 type AssistantMessage struct {
 	Provider string
 	Model    string
-	Content  Stream[ContentDelta]
+	Content  aish.Stream[ContentDelta]
 }
 
 // ContentDelta is one chunk of an assistant message.
@@ -260,7 +262,7 @@ type ToolResult struct {
 	IsError bool
 	// Live is the output while the tool runs, for frontends; the model sees
 	// only Content.
-	Live *Stream[[]byte]
+	Live *aish.Stream[[]byte]
 }
 
 // Compacted replaces everything up to transaction UpTo with Summary when

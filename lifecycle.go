@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"sync"
+	"time"
 )
 
 type SessionInfo struct {
@@ -35,6 +36,11 @@ type SessionConfig struct {
 	// Log receives the records of the core and of every module; they are
 	// discarded when it is nil.
 	Log *slog.Logger
+	// StreamTimeout limits how long a transaction waits for its streams to
+	// close once its hooks have run. When it passes, the transaction is
+	// cancelled with ErrStreamStalled and the open streams are closed with
+	// that error. Zero means no limit.
+	StreamTimeout time.Duration
 }
 
 // Session is a set of module instances and their journal (§4.1).
@@ -82,7 +88,7 @@ func NewSession(cfg SessionConfig) (*Session, error) {
 		info.ID = rand.Text()
 	}
 	s := &Session{
-		s:         newSession(sessionConfig{info: info, log: cfg.Log}),
+		s:         newSession(sessionConfig{info: info, log: cfg.Log, streamTimeout: cfg.StreamTimeout}),
 		instances: slices.Clone(cfg.Instances),
 	}
 	for _, inst := range s.instances {
@@ -150,6 +156,14 @@ func (s *Session) Wait(ctx context.Context) error {
 // Emits with ErrClosed and then runs Stop with ctx, in reverse order, on
 // every instance that passed Init; Stop must cope with a Start that never
 // ran. Closing twice is a no-op.
+//
+// If ctx ends while the transaction is still running (a hook ignores
+// cancellation), Close stops waiting, still runs Stop and returns the ctx
+// error joined with the Stop errors.
+//
+// A hook may call Close with its own ctx: Close then does not wait for the
+// transaction, which ends when the hook returns, and Stop gets ctx without
+// its cancellation.
 func (s *Session) Close(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -162,9 +176,14 @@ func (s *Session) closeLocked(ctx context.Context) error {
 		return nil
 	}
 	s.closed = true
-	s.s.close()
-
 	var errs []error
+	if err := s.s.close(ctx); err != nil {
+		errs = append(errs, err)
+	}
+	if s.s.onRunner(ctx) {
+		ctx = context.WithoutCancel(ctx) // the hook ctx was just cancelled
+	}
+
 	for _, inst := range slices.Backward(s.instances[:s.inited]) {
 		st, ok := inst.Module.(Stopper)
 		if !ok {

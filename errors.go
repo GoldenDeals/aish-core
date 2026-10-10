@@ -31,6 +31,10 @@ var (
 	// only once every module has subscribed.
 	ErrNotStarted = errors.New("aish: emit before the session started")
 
+	// ErrStreamStalled is the cause of a transaction cancelled because a
+	// stream stayed open longer than SessionConfig.StreamTimeout.
+	ErrStreamStalled = errors.New("aish: stream not closed in time")
+
 	// ErrClosed is returned by Emit after the session was closed.
 	ErrClosed = errors.New("aish: session closed")
 )
