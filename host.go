@@ -183,8 +183,8 @@ func (h *Host) Hold() (release func()) { return h.sess.hold() }
 // one, and returns it. The caller owns it: it Emits to it, Waits for it and
 // closes it; the parent's Close closes whatever is still open. Spawn fails
 // when the session has no Spawner, the agent is unknown, or the parent is
-// closing.
-func (h *Host) Spawn(ctx context.Context, agent string) (*Session, error) {
+// closing. extra instances join the ones the Spawner builds.
+func (h *Host) Spawn(ctx context.Context, agent string, extra ...Instance) (*Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("aish: spawn %s: %w", agent, err)
 	}
@@ -201,7 +201,7 @@ func (h *Host) Spawn(ctx context.Context, agent string) (*Session, error) {
 		Agent:         agent,
 		Parent:        parent.ID,
 		Depth:         parent.Depth + 1,
-		Instances:     instances,
+		Instances:     append(instances, extra...),
 		Log:           h.sess.rawLog,
 		StreamTimeout: h.sess.streamTimeout,
 		Agents:        h.sess.agents,

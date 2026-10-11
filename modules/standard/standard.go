@@ -8,6 +8,7 @@ import (
 	_ "github.com/GoldenDeals/aish-core/modules/context/skills"
 	_ "github.com/GoldenDeals/aish-core/modules/context/system_prompt"
 	_ "github.com/GoldenDeals/aish-core/modules/frontend/cli"
+	_ "github.com/GoldenDeals/aish-core/modules/frontend/tui"
 	_ "github.com/GoldenDeals/aish-core/modules/llm/anthropic"
 	_ "github.com/GoldenDeals/aish-core/modules/log/file"
 	_ "github.com/GoldenDeals/aish-core/modules/log/trace"

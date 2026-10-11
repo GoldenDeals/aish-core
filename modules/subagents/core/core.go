@@ -36,6 +36,7 @@ func init() {
 	aish.RegisterModule(aish.ModuleInfo{ID: "subagents.core", New: func() aish.Module { return &Subagent{} }})
 	aish.RegisterEvent[Started]()
 	aish.RegisterEvent[Finished]()
+	aish.RegisterEvent[Activity]()
 }
 
 // Subagent is the module subagents.core.
@@ -174,6 +175,7 @@ type Finished struct {
 
 func (Started) Kind() string  { return "subagent.started" }
 func (Finished) Kind() string { return "subagent.finished" }
+func (Activity) Kind() string { return "subagent.activity" }
 
 // agent is what the tool says about one callable agent.
 type agent struct {
@@ -320,7 +322,11 @@ func (s *Subagent) start(ctx context.Context, c events.ToolCall) (string, error)
 		return "", fmt.Errorf("agent %q is not available", in.Agent)
 	}
 
-	child, err := spawn(ctx, s.h, in.Agent)
+	out := make(chan Activity, activityQueue)
+	child, err := spawn(ctx, s.h, in.Agent, aish.Instance{
+		Name:   "subagents.watch",
+		Module: &watcher{callID: c.ID, agent: in.Agent, out: out},
+	})
 	if err != nil {
 		return "", fmt.Errorf("start agent %s: %w", in.Agent, err)
 	}
@@ -332,7 +338,7 @@ func (s *Subagent) start(ctx context.Context, c events.ToolCall) (string, error)
 	go func() {
 		defer s.wg.Done()
 		defer release()
-		s.collect(child, c.ID, in)
+		s.collect(child, c.ID, in, out)
 	}()
 
 	return fmt.Sprintf("Agent %s started (session %s) and is working in the background. "+
@@ -342,9 +348,16 @@ func (s *Subagent) start(ctx context.Context, c events.ToolCall) (string, error)
 
 // collect waits for the agent and delivers its answer to the parent in one
 // transaction. It runs on the Start context: Close of the parent ends it.
-func (s *Subagent) collect(child *aish.Session, callID string, in input) {
+func (s *Subagent) collect(child *aish.Session, callID string, in input, out <-chan Activity) {
+	stop, pumped := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(pumped)
+		s.pump(out, stop)
+	}()
 	answer, askErr := ask(s.ctx, child, s.h.Session().ID, in.Prompt)
 	s.closeChild(child, in.Agent)
+	close(stop)
+	<-pumped
 	if askErr != nil {
 		answer = askErr.Error()
 	}
@@ -355,6 +368,26 @@ func (s *Subagent) collect(child *aish.Session, callID string, in input) {
 	)
 	if err != nil && !errors.Is(err, aish.ErrUnhandled) && !errors.Is(err, aish.ErrClosed) && !errors.Is(err, context.Canceled) {
 		s.h.Log().Warn("delivering agent.return", "agent", in.Agent, "call", callID, "err", err)
+	}
+}
+
+// pump delivers the child's activity to the parent until stop is closed, then
+// delivers what is left.
+func (s *Subagent) pump(out <-chan Activity, stop <-chan struct{}) {
+	for {
+		select {
+		case a := <-out:
+			s.emit(s.ctx, a)
+		case <-stop:
+			for {
+				select {
+				case a := <-out:
+					s.emit(s.ctx, a)
+				default:
+					return
+				}
+			}
+		}
 	}
 }
 
@@ -409,6 +442,6 @@ func (s *Subagent) closeChild(child *aish.Session, agent string) {
 
 // spawn exists because staticcheck's nilness pass panics on a two-value call
 // of Host.Spawn made directly from a method of this package.
-func spawn(ctx context.Context, h *aish.Host, agent string) (*aish.Session, error) {
-	return h.Spawn(ctx, agent) //nolint:wrapcheck // delegate wraps it
+func spawn(ctx context.Context, h *aish.Host, agent string, extra ...aish.Instance) (*aish.Session, error) {
+	return h.Spawn(ctx, agent, extra...) //nolint:wrapcheck // delegate wraps it
 }

@@ -20,6 +20,6 @@ context {
 
 policy cedar ./examples/policies/allow-all.cedar
 
-pragma frontend cli
+pragma frontend tui
 pragma store jsonl .agents/sessions
 pragma subagents core communication

@@ -126,10 +126,24 @@ func TestTaskStartsTheAgentAndItsAnswerReturnsLater(t *testing.T) {
 			kinds = append(kinds, e.Event.Kind())
 		}
 	}
-	for _, want := range []string{"subagent.started", "subagent.finished", "agent.return"} {
+	for _, want := range []string{"subagent.started", "subagent.activity", "subagent.finished", "agent.return"} {
 		if !slices.Contains(kinds, want) {
 			t.Errorf("events = %v, missing %s", kinds, want)
 		}
+	}
+	if i, j := slices.Index(kinds, "subagent.activity"), slices.Index(kinds, "subagent.finished"); i > j {
+		t.Errorf("activity must precede finished: %v", kinds)
+	}
+	var said bool
+	for _, tx := range sc.session.Journal().Txs() {
+		for _, e := range tx.Events {
+			if a, ok := e.Event.(core.Activity); ok && a.Type == core.ActivityMessage && a.Text == "chores finished" && a.Agent == "kid" {
+				said = true
+			}
+		}
+	}
+	if !said {
+		t.Error("the child's answer must be reported as activity")
 	}
 }
 
